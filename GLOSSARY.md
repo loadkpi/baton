@@ -1,65 +1,65 @@
 # Baton
 
-Личный оркестратор, который запускает официальные CLI Claude Code и Codex, следит за их сессиями и переносит работу между ними.
+A personal orchestrator that launches the official Claude Code and Codex CLIs, tracks their sessions, and hands work over between them.
 
 ## Language
 
-### Участники
+### Actors
 
-**Агент**:
-Официальный CLI поставщика, который делает работу: `claude` или `codex`.
-_Avoid_: модель, ассистент, бот
+**Agent**:
+A vendor CLI that does the work: `claude` or `codex`.
+_Avoid_: model, assistant, bot
 
-**Субагент**:
-Вспомогательный исполнитель внутри Агента. Оркестратор его не моделирует и видит только по событиям.
-_Avoid_: агент (в этом значении)
+**Subagent**:
+A helper worker inside an Agent. Baton does not model it and only sees it through Events.
+_Avoid_: agent (in this sense)
 
-**Профиль**:
-Конфиг-папка Агента со своим логином, историей и лимитами, например `claude-personal`, `claude-work` или `codex` в песочнице конкретного проекта.
-_Avoid_: аккаунт, конфиг, CLAUDE_CONFIG_DIR
+**Profile**:
+An Agent's config directory with its own login, history and limits, e.g. `claude-personal`, `claude-work`, or `codex` inside a specific project's sandbox.
+_Avoid_: account, config, CLAUDE_CONFIG_DIR
 
-**Демон**:
-Фоновый процесс Baton на хосте, который следит за Событиями Агентов и сообщает о них человеку. Агентом не является.
-_Avoid_: агент-оркестратор, conductor, координатор, orch
+**Daemon**:
+Baton's background process on the host that watches Agent Events and tells the human about them. It is not an Agent.
+_Avoid_: orchestrator agent, conductor, coordinator, orch
 
-### Работа
+### Work
 
-**Проект**:
-Git-репозиторий, о котором знает Baton. У Проекта есть Рабочие копии и Задачи.
-_Avoid_: репозиторий, репо, workspace
+**Project**:
+A git repository that Baton knows about. A Project has Working copies and Tasks.
+_Avoid_: repo, workspace
 
-**Среда**:
-Где запускается Агент: на хосте (`host`) или в песочнице проекта (`sandbox`).
-_Avoid_: runtime, Docker, контейнер, окружение
+**Environment**:
+Where an Agent runs: on the host (`host`) or in the project's sandbox (`sandbox`). Not to be confused with environment variables.
+_Avoid_: runtime, Docker, container
 
-**Задача**:
-Единица работы с целью, которая переживает смену Сессий и Агентов. Каждая Сессия принадлежит Задаче. Задача может быть безымянной, пока ей не дали имя.
-_Avoid_: тикет, фича, job
+**Working copy**:
+A directory with the Project's files where an Agent works: the main checkout or a worktree. At most one Session is active in a Working copy at any time.
+_Avoid_: worktree (as the general name), checkout, folder
 
-**Рабочая копия**:
-Каталог с файлами проекта, в котором работает Агент: основной checkout или worktree. В одной Рабочей копии одновременно идёт не больше одной активной Сессии.
-_Avoid_: worktree (как общее название), checkout, папка
+**Task**:
+A unit of work with a goal that outlives Sessions and Agents. Every Session belongs to a Task. A Task may stay unnamed until someone names it.
+_Avoid_: ticket, feature, job
 
-**Сессия**:
-Один нативный диалог Агента под одним Профилем, с ровно одним нативным идентификатором сессии. `/clear` или переключение диалога начинают новую Сессию.
-_Avoid_: запуск, чат, процесс
+**Session**:
+One native Agent conversation under one Profile, with exactly one native session id. `/clear` or switching conversations starts a new Session.
+_Avoid_: run, chat, process
 
-**Терминал**:
-Место, где идёт интерактивная работа: tmux-сессия и подключённая к ней вкладка. В одном Терминале могут подряд пройти несколько Сессий.
-_Avoid_: сессия (в значении tmux), окно
+**Event**:
+A record of something that happened in a Session, as reported by the Agent. Everything Baton knows about a Session, including its status, is derived from Events.
+_Avoid_: log, message, trace
 
-**Событие**:
-Запись о том, что произошло в Сессии, как её сообщил Агент. Всё, что Baton знает о Сессии, включая её статус, выводится из Событий.
-_Avoid_: лог, сообщение, трейс
+**Terminal**:
+Where interactive work happens: a terminal tab, optionally attached to a multiplexer session. Several Sessions may run one after another in the same Terminal.
+_Avoid_: session (in the tmux sense), window
 
-**Интерфейс**:
-Способ взаимодействия с Сессией: `tui` (родной интерфейс Агента в Терминале) или `headless` (без человека, через структурированный вывод).
-_Avoid_: режим
+**Interface**:
+How a Session is driven: `tui` (the Agent's native UI in a Terminal) or `headless` (no human, structured output).
+_Avoid_: mode
 
-**Политика**:
-Именованный набор правил о том, какие действия Агента разрешены, запрещены или требуют подтверждения человека, например `default` или `night`.
-_Avoid_: режим, permissions, ночной режим
+**Policy**:
+A named set of rules for which Agent actions are allowed, denied, or need human approval, e.g. `default` or `night`.
+_Avoid_: mode, permissions, night mode
 
 **Handoff**:
-Документ, по которому следующая Сессия продолжает чужую работу. Автоматическая часть есть всегда; смысловую пишет отдающая Сессия или, если не успела, принимающая.
-_Avoid_: передача контекста, саммари
+The document a next Session uses to continue someone else's work. The automatic part is always present; the narrative part is written by the handing-over Session or, if it did not manage to, by the receiving one.
+_Avoid_: context transfer, summary

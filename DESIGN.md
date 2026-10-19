@@ -1,329 +1,270 @@
-# Единый оркестратор для Claude Code и Codex
+# Baton: one orchestrator for Claude Code and Codex
 
-Oct 19, 2026 · @Paul
+Oct 19, 2026 · @Paul · revised Oct 20, 2026 after the design review
 
-Предлагается личный оркестратор поверх официальных CLI Claude Code и Codex. Он даёт единый интерфейс, свою историю и задачи, «одно окно» со статусами и интеграцию с Guake, при этом не подменяет сами агенты.
+Baton is a personal orchestrator on top of the official Claude Code and Codex CLIs. It keeps one set of skills and instructions for both, shows which Sessions are running or waiting for you, notifies you when an Agent needs you, and hands a Task over from one Agent to another. It never replaces the Agents themselves.
 
-**Это черновик для обсуждения, а не утверждённая спецификация.** В разделе «Ключевые решения» у каждого пункта перечислены варианты и предварительная рекомендация. Всё, с чем вы не согласны, отмечайте комментарием прямо в тексте. Нерешённые вопросы собраны в конце документа.
+Capitalized terms (Agent, Profile, Session, Task, …) are defined in [GLOSSARY.md](GLOSSARY.md). Decisions that are hard to reverse are recorded in [docs/adr/](docs/adr/).
 
-## Контекст и проблема
+## Context and problem
 
-Claude Code и Codex работают параллельно и на хосте, и в Docker. Каждый агент живёт в своём «мире»: у него своя история, свои папки с конфигами и свои лимиты.
+Claude Code runs on the host under several Profiles (`~/.claude`, `~/.claude-personal`, `~/.claude-work`). Codex runs only inside the per-project Docker sandbox [`ai-sandbox`](https://github.com/loadkpi/ai-sandbox), where every project has its own home directory, login and history (`.ai-sandbox/home`). So every Agent × Profile × Project is a separate world.
 
-Что мешает сейчас:
+What hurts today:
 
-- Скилы, инструкции, хуки и MCP приходится поддерживать в двух форматах.
-- История хранится в недокументированных форматах поставщиков, и найти что-то сразу в обеих невозможно.
-- Неясно, какая сессия работает, какая ждёт подтверждения, а какая уже закончила.
-- Лимиты подписок не видны в одном месте.
-- Задачу нельзя передать из Claude в Codex и обратно без ручного копирования контекста.
-- Терминальные вкладки Guake не связаны с проектами и задачами.
+- Skills, instructions, hooks and MCP servers are maintained in several formats and places. Skills already come from three sources: plain directories, Claude's own synced skills, and a third-party installer (`~/.agents/.skill-lock.json`).
+- It is unclear which Session is working, which is waiting for approval, and which has finished.
+- A Task cannot move from Claude to Codex and back without copying context by hand.
+- Terminal tabs in Guake are not tied to Projects or Tasks.
 
-## Цели и не-цели
+## Goals and non-goals
 
-**Цели**
+**Goals for v1**
 
-1. Единый способ запускать, продолжать и останавливать сессии Claude Code и Codex, локально и в Docker.
-2. Одна папка-источник для скилов, инструкций, slash-команд, субагентов, хуков, MCP и правил подтверждений, из которой генерируются конфиги для обоих агентов.
-3. Собственный архив истории в открытом формате, в своих папках, с поиском по всем агентам.
-4. «Одно окно» со списком проектов, задач и сессий, их статусами и приблизительными лимитами. Основная точка входа — веб-дашборд.
-5. Перенос задачи между сессиями и агентами через handoff-документ, в том числе автоматически, когда кончается лимит.
-6. Чекпоинты после каждого хода агента и откат к ним.
-7. Журнал решений и заметок проекта, который получает каждая новая сессия.
-8. Очередь задач и планировщик, в том числе для ночных запусков.
-9. Уведомления о том, что сессия ждёт ответа или закончила, на рабочем столе и в Telegram.
-10. Доступ с телефона через Telegram-бота: статусы, подтверждения, новые задачи.
-11. Сессии открываются во вкладках Guake, а вкладки привязаны к задачам.
+1. One source of instructions, skills, MCP servers and hooks, rendered into every Profile on the host and in project sandboxes (`baton sync`).
+2. Start Sessions of either Agent in either Environment (`host`, `sandbox`) in a named Guake tab.
+3. A live list of Sessions and their statuses across all Profiles and Projects (`baton ls`), including Sessions started by hand outside Baton.
+4. Desktop notifications when an Agent waits for approval or for input; one-way Telegram messages while you are away.
+5. Manual Handoff of a Task from one Session to another, across Agents and Profiles.
 
-**Не-цели**
+**Non-goals**
 
-- Свой агентный цикл, свои инструменты или прямые вызовы моделей: для этого есть официальные CLI.
-- Многопользовательский режим и доступ для других людей.
-- Замена родного TUI агентов в первой версии.
-- Точный учёт лимитов, совпадающий с данными поставщика.
-- Продолжение нативной сессии из собственного архива.
+- An own agent loop, own tools, or direct model calls: the official CLIs do that.
+- Multiple users or access for other people.
+- Replacing the Agents' native TUI.
+- Exact limit accounting that matches the vendor's numbers.
+- Resuming a native Session from Baton's own archive.
+- A decision log as a Baton feature. ADRs, a glossary and a `/decide`-style skill delivered by `baton sync` cover it.
 
-## Ограничения
+Everything else from the first draft (web dashboard, two-way Telegram, queue and night runs, per-turn checkpoints, limits) is in [v2 and later](#v2-and-later).
 
-Основное ограничение такое: оркестратор работает только через официальные CLI и SDK под вашим собственным логином и никогда не трогает токены напрямую.
+## Constraints
 
-| Поставщик | Можно | Нельзя |
+The main rule: Baton only works through the official CLIs and SDKs under your own login and never touches tokens directly.
+
+| Vendor | Allowed | Not allowed |
 | --- | --- | --- |
-| Anthropic | Запускать `claude` (интерактивно или `claude -p`) и Agent SDK под своей подпиской. По [справке Anthropic](https://support.claude.com/en/articles/15036540-use-the-claude-agent-sdk-with-your-claude-plan) (обновление от 7.10.2026) они расходуют лимиты подписки | Извлекать OAuth-токен, подделывать клиент, обращаться к API с токеном подписки, давать доступ другим. По [Legal and compliance](https://code.claude.com/docs/en/legal-and-compliance) продуктам для других нужен API-ключ |
-| OpenAI | `codex`, `codex exec` и Codex SDK под ChatGPT-планом. Они перечислены на [странице цен](https://developers.openai.com/codex/pricing) | Обращаться к недокументированному `chatgpt.com/backend-api/codex`, передавать свою сессию другим |
+| Anthropic | Run `claude` (interactive or `claude -p`) and the Agent SDK under your subscription. Per the [Anthropic help article](https://support.claude.com/en/articles/15036540-use-the-claude-agent-sdk-with-your-claude-plan) (updated Oct 7, 2026) they draw on subscription limits | Extracting the OAuth token, spoofing the client, calling the API with a subscription token, sharing access. Per [Legal and compliance](https://code.claude.com/docs/en/legal-and-compliance), products for others need an API key |
+| OpenAI | `codex`, `codex exec` and the Codex SDK under a ChatGPT plan, listed on the [pricing page](https://developers.openai.com/codex/pricing) | Calling the undocumented `chatgpt.com/backend-api/codex`, sharing your session with others |
 
-Технические ограничения:
+Technical constraints:
 
-- Флаги CLI, события хуков и форматы файлов сессий меняются между версиями без гарантий совместимости.
-- Стабильного API для лимитов подписки нет ни у одного поставщика.
-- Если в окружении есть `ANTHROPIC_API_KEY`, он перекрывает логин по подписке, и начинается тарификация по API. У Codex похожая ситуация с ключом OpenAI. Поэтому окружение подпроцесса нужно очищать явно.
+- CLI flags, hook events and session file formats change between versions without compatibility guarantees.
+- Neither vendor has a stable API for subscription limits.
+- `ANTHROPIC_API_KEY` in the environment overrides the subscription login and switches to API billing; the OpenAI key behaves similarly for Codex. Baton clears these variables explicitly when it launches an Agent on the host.
+- Codex inside the sandbox only passes an allow-listed set of environment variables to the commands it runs (`shell_environment_policy.include_only` in the rendered `config.toml`). Baton must not rely on environment variables reaching anything the Agent runs.
 
-Правила меняются часто. Перед каждым крупным этапом стоит перечитать текущие условия использования.
+Vendor rules change often; re-read the terms before each major stage.
 
-## Существующие решения
+## Build or reuse
 
-Менеджеры сессий для агентов уже есть, и примерно половину целей они закрывают. Предлагаю за неделю попробовать один-два из них, а потом решить, писать своё целиком или поверх готового.
+Existing session managers (Agent Deck, Agent of Empires, CCManager, kage, git-paw, RCFlow) mostly sit on top of tmux and know nothing about `ai-sandbox` [unverified, based on their descriptions]. v1 does not need tmux (see [D8](#d8-terminal-guake-now-tmux-as-an-experiment)), and its scope is small, so **Baton is built from scratch**. Session managers are worth another look in v2, after the tmux experiment.
 
-| Проект | Что закрывает | Чего, вероятно, нет |
-| --- | --- | --- |
-| Agent Deck ([обзор](https://codex.danielvaughan.com/2026/05/05/codex-cli-session-managers-ccmanager-agent-deck-parallel-agent-orchestration/)) | Claude Code, Codex и другие агенты, conductor-сессия, которая следит за дочерними | Свой формат истории, handoff |
-| Agent of Empires, CCManager (там же) | TUI поверх tmux, статусы сессий | Единые конфиги, задачи |
-| [kage](https://pkg.go.dev/github.com/Sean0628/kage) | tmux, worktree на каждую фичу, TUI-дашборд, координатор через MCP | История, лимиты |
-| [git-paw](https://docs.rs/crate/git-paw/latest) | Параллельные сессии в worktree, восстановление после сбоя | Задачи, история |
-| RCFlow ([пост автора](https://ua.linkedin.com/in/flowelfox)) | Машины, проекты и сессии, вкладка задач, статусы | Лицензия AGPL, проверить, подходит ли |
-| [agent-cli-starter](https://github.com/youngjin39/agent-cli-starter) | Синхронизация CLAUDE.md и .claude/ с AGENTS.md и .codex/ | Это шаблон, а не оркестратор |
+[agent-cli-starter](https://github.com/youngjin39/agent-cli-starter) syncs `CLAUDE.md`/`.claude/` with `AGENTS.md`/`.codex/`, but it is a template for one repository, not a multi-Profile sync.
 
-В готовых решениях, скорее всего, не будет нейтрального к поставщику архива истории, handoff между агентами и интеграции с Guake. Это и есть кандидаты на собственную разработку.
+## Architecture
 
-## Архитектура
+v1 has no stateful daemon. All truth lives in files under `~/.baton`; the CLI, the hooks and a stateless watcher read and write those files.
 
-Один локальный демон хранит всё состояние, а вокруг официальных CLI работают тонкие адаптеры. Демон не обращается к моделям: он запускает процессы, принимает события и ведёт задачи.
+```mermaid
+flowchart LR
+  subgraph host[Host]
+    cli[baton CLI<br/>sync · new · ls · handoff]
+    watch[baton watch<br/>systemd --user]
+    files[(~/.baton<br/>projects/&lt;p&gt;/…)]
+    guake[Guake tab]
+    claudeH[claude<br/>host Profiles]
+    hookH[baton hook]
+  end
+  subgraph sbx[ai-sandbox container]
+    agentS[codex / claude<br/>project Profile]
+    hookS[baton hook<br/>mounted read-only]
+  end
+  cli -- launches --> guake
+  guake --> claudeH
+  guake -- run.sh --> agentS
+  claudeH --> hookH --> files
+  agentS --> hookS -- mounted rw --> files
+  cli <--> files
+  watch -- inotify --> files
+  watch --> notify[notify-send<br/>Telegram]
+```
 
-&#91;embedded content: архитектура · демон, адаптеры, tmux, Guake\]
+- **`baton hook <agent>`** is the only thing Agents call. It reads the hook payload from stdin, adds the agent name, timestamp and host name, and appends one line to the Session's Event file under a file lock. It has no other logic, so it is fast enough even for Codex's 1-second `SessionEnd` budget.
+- **`baton ls`** and **`baton watch`** derive Session statuses from Events. `baton watch` is a stateless Daemon under `systemd --user`: it sends notifications and marks Sessions `lost`. If it is down, Sessions and `baton ls` keep working; you only lose notifications.
+- **One Go binary** (`CGO_ENABLED=0`) in `~/.baton/bin` provides all commands. The sandbox image has `python3`, `bash` and `jq` but no Go; the static binary is mounted read-only, so the same code runs on both sides.
+- A Daemon with an API, state and push updates arrives in v2 with the web dashboard.
 
-Демон запускает сессии в tmux. Хуки обоих агентов возвращают события в демон через Unix-сокет, а Guake только подключается к tmux. Адаптер для каждой пары «агент × runtime» (хост или Docker) сводится к двум функциям: как запустить и как разобрать событие. CLI, веб-дашборд и Telegram-бот работают как клиенты одного API демона, поэтому любой из них видит одно и то же состояние.
+### Files
 
-## Ключевые решения
+```
+~/.config/baton/
+  config.toml                 # source repository path, Profiles and their tags
+  secrets.env                 # values for ${VAR} placeholders, mode 0600
+~/.baton/
+  bin/baton                   # mounted read-only into sandboxes
+  sync-manifest.json          # files created by baton sync, per Profile
+  projects/<project>/         # mounted read-write into this project's sandbox only
+    project.toml              # path, default Environment
+    tasks/<task>.toml         # title, status
+    working-copies.toml       # current Task of each Working copy
+    sessions/<session>.jsonl  # raw Events, mode 0600
+    handoffs/<task>/<n>.md
+```
 
-У каждого решения указаны варианты и предварительная рекомендация. Рекомендации стоит оспаривать.
+## Key decisions
 
-### Р1. Как управлять агентами
+### D1. Domain model
 
-| Вариант | Плюсы | Минусы |
-| --- | --- | --- |
-| A. Только headless (`claude -p --output-format stream-json`, `codex exec --json`, SDK) | Структурированные события, полный контроль | Свой UI вместо родного TUI, больше работы |
-| B. Только родной TUI в tmux | Привычный интерфейс, почти нет кода | Состояние видно только косвенно, через хуки и файлы |
-| C. Гибрид | Интерактивная работа в TUI, фоновые задачи в headless | Два пути запуска в адаптере |
+Project → Working copy → Task → Session → Event. A Session also has an Agent, a Profile and an Environment.
 
-**Рекомендация: C.** Состояние в обоих режимах собирается одинаково, через хуки, которые отправляют события в демон.
+- **A Session is one native conversation.** `/clear` or switching conversations inside the same Terminal starts a new Session of the same Task.
+- **At most one active Session per Working copy.** Parallel work means separate Tasks in separate Working copies. This also makes it unambiguous whose turn changed the files.
+- **The Working copy determines the Task.** `baton new` records "the current Task of Working copy X is T" in `~/.baton`. Every Session in X belongs to T, whether Baton started it or you ran `claude-personal` by hand. Without a record, an unnamed Task is created and becomes current. The current Task of a Working copy can change only when no Session is active there. No environment variables are involved, so it works inside the sandbox too.
+- **Tasks are cheap.** `baton new <project>` without a name creates an unnamed Task (`<project>/2026-10-20-1`) that can be named later.
+- **Task status is what a human decides:** `open`, `done`, `dropped`. Whether a Task is "running" or "waiting" is derived from its active Session, never stored.
 
-### Р2. Docker
+### D2. Session statuses
 
-Один образ, в котором установлены оба CLI. Проект монтируется томом, учётные данные (`~/.claude`, `~/.codex`) тоже монтируются и только на чтение, где это возможно. Адаптер различает только способ запуска: `exec` на хосте или `docker exec` в контейнере. Хуки внутри контейнера отправляют события в демон через проброшенный Unix-сокет.
+Five statuses, all derived from the last Event. Hook names below were checked against the [Claude Code](https://code.claude.com/docs/en/hooks) and [Codex](https://learn.chatgpt.com/docs/hooks) documentation on Oct 20, 2026.
 
-Открытый вопрос: один долгоживущий контейнер на проект или отдельный контейнер на каждую задачу.
-
-### Р3. Единые скилы, инструкции, хуки и MCP
-
-Источник правды — своя папка, например `~/.orch/config/`. Генератор раскладывает из неё файлы в форматы обоих агентов:
-
-| Что | Источник | Claude Code | Codex |
+| Status | Claude Code | Codex | Meaning |
 | --- | --- | --- | --- |
-| Инструкции | `AGENTS.md` | симлинк `CLAUDE.md` | `AGENTS.md` |
-| Скилы | `skills/*/SKILL.md` | `.claude/skills/` | `.agents/skills/` |
-| Хуки | манифест + свои скрипты | `.claude/settings.json` | `.codex/hooks.json` и флаг в `config.toml` |
-| MCP | один манифест | `.mcp.json` или настройки | `config.toml` |
+| `running` | `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `PostToolUseFailure` | `UserPromptSubmit`, `PreToolUse`, `PostToolUse` | The Agent is working |
+| `waiting_approval` | `PermissionRequest` | `PermissionRequest` | The Agent needs your approval |
+| `waiting_input` | `SessionStart`, `Stop` | `SessionStart`, `Stop`, `Interrupt` | It is your turn |
+| `ended` | `SessionEnd` | `SessionEnd` | The conversation is over |
+| `lost` | — | — | The process or container is gone without `SessionEnd`; detected by `baton ls` and `baton watch` |
 
-Формат SKILL.md общий для обоих агентов, отличаются только пути. Хуки пишутся как свои скрипты с единым входом, а для каждого агента генерируется только привязка к его событиям. Особенности Codex для скилов хранятся в отдельном файле `agents/openai.yaml` и в общий SKILL.md не попадают.
+The first draft also had `starting`, `idle`, `done` and `failed`. `idle` is the same as `waiting_input`; "done" belongs to the Task (D1); `starting` cannot be observed reliably; `failed` returns in v2 with headless Sessions. Codex has no "waiting for input" hook, which is why `Stop` is the common signal.
 
-### Р4. История
+### D3. Environments: host and sandbox
 
-| Вариант | Суть |
+The `sandbox` Environment is `ai-sandbox`, not a custom image. `ai-sandbox` knows nothing about Baton ([ADR 0001](docs/adr/0001-ai-sandbox-knows-nothing-about-baton.md)): Baton uses generic mechanisms that make sense without it (extra mounts, config fragments), or wraps `run.sh` through `AI_SANDBOX_PRINT_ARGS`.
+
+- The default Environment is `sandbox` if the Project has `.ai-sandbox/run.sh`, otherwise `host`.
+- Each Project's sandbox keeps its own Profiles (own login and history). Baton unifies history through Events, not through shared config directories.
+- Two directories are mounted into the sandbox: `~/.baton/projects/<project>` read-write and `~/.baton/bin` read-only. Nothing else from `~/.baton`, so a sandbox never sees other Projects.
+- **v1 sandbox Sessions run only in the main checkout.** A git worktree stores the absolute host path to `.git/worktrees/<name>`, which does not exist inside the container (the Project is mounted at `/workspace`), and `.ai-sandbox/` is gitignored, so a worktree has no sandbox at all. The one-active-Session rule (D1) makes this safe.
+- Codex in every sandbox asks once to trust user hooks (`/hooks`). Baton does not bypass that review; `baton ls` shows "no events, check `/hooks`" for a Codex Session that reports nothing.
+
+### D4. One source for instructions, skills, MCP and hooks (`baton sync`)
+
+The source is a separate private git repository (for example `~/github/my/agent-config`), set in `~/.config/baton/config.toml`. Baton itself holds no personal content.
+
+| What | Source | Claude Code | Codex |
+| --- | --- | --- | --- |
+| Instructions | `AGENTS.md` | `CLAUDE.md` in the Profile | `AGENTS.md` in the Profile (sandbox: a fragment, see below) |
+| Skills | `skills/*/SKILL.md` | `<profile>/skills/` | `.agents/skills/` or `<profile>/skills/` |
+| MCP | one manifest | Profile settings | `config.toml` (sandbox: a fragment) |
+| Status hooks | generated | `<profile>/settings.json` | `<profile>/hooks.json` |
+
+Rules:
+
+- **Targets are Profiles only:** host Profiles and the Profiles inside each Project's `.ai-sandbox/home`. Sync never writes files that git tracks, so team repositories stay untouched.
+- **Sync owns only what it created.** A manifest lists every file sync wrote; it updates or deletes only those. If a foreign file is in the way, sync stops with an error. Claude's own `skills/synced/`, existing work skills and third-party installs stay as they are.
+- **Tags decide what reaches each Profile.** Every source item may carry tags (`work`, `personal`, …); every Profile accepts a list of tags. Untagged instructions and skills go everywhere.
+- **No secrets in the source.** Manifests use `${VAR}` placeholders; values come from `~/.config/baton/secrets.env` (0600). A Profile receives only the secrets of the items its tags accept.
+- **Inside the sandbox, `ai-sandbox` owns security and Baton owns content.** `run.sh` regenerates `.codex/config.toml` and `.codex/AGENTS.md` on every run (unless you removed its marker), and these are exactly the files where Codex keeps MCP servers and global instructions. Baton writes only fragments (`config.d/*.toml`, `AGENTS.d/*.md`); a generic fragments mechanism in `ai-sandbox`, or the print-args wrapper, merges them (ADR 0001).
+
+Slash commands, subagents and a unified permission policy (`policy.yaml`) are v2: their formats differ more between the Agents, and Codex prompts can only live at the user level.
+
+### D5. Handoff
+
+A Handoff lives in `~/.baton/projects/<project>/handoffs/<task>/<n>.md`, never in the Working copy.
+
+- **Automatic part** (`baton handoff`): Task, Working copy, branch, HEAD, `git status`, `git diff --stat`, the last 10 commands with exit codes taken from Events, a link to the Session's Event file.
+- **Narrative part** (the `/handoff` skill, which pipes Markdown into `baton handoff save`): goal; what is done; decisions and why; rejected options and why; the next step (one, concrete); open questions; how to verify the result. `baton handoff save` finds the Task from the current directory (D1).
+- **If the handing-over Session could not write the narrative part** (for example, its limit ran out), the receiving Session writes it on its first turn from the automatic part and the Event tail. The header records who wrote it.
+- `baton handoff <task> --to <agent>[@<profile>]` writes the automatic part, ends nothing, and opens a new Session whose first message is "continue the Task from Handoff `<path>`".
+
+Collecting failed tests (first draft D5) is dropped for v1: parsing test output of different projects costs more than exit codes give.
+
+### D6. Notifications
+
+| Event | Notify |
 | --- | --- |
-| A. Разбирать нативные файлы | Читать `~/.claude/projects/*.jsonl` и `~/.codex/sessions` |
-| B. Перехватывать события | Хуки и stream-json пишут в свой архив |
-| C. A + B | События идут в реальном времени, нативные файлы досканируются для полноты |
+| `waiting_approval` | Always |
+| `waiting_input` | Only if the turn took longer than 30 seconds; otherwise you are watching anyway |
+| `lost` | Always |
 
-**Рекомендация: C**, с нормализацией в свой формат (JSONL-лог плюс индекс в SQLite). Нативные файлы не трогаем и не заменяем. Свой архив нужен для поиска, аудита и handoff, а не для продолжения сессии.
+The channel is the desktop (`notify-send`) by default. `baton away` switches to Telegram until `baton back`. Without a stateful Daemon, "no keyboard activity for N minutes" is not reliable, so the switch is explicit.
 
-### Р5. Задачи и handoff
+Notifications are sent by `baton watch` on the host, never by hooks: the sandbox has neither `notify-send` nor your desktop D-Bus, and mounting the D-Bus socket would give the container control over desktop apps. As a side effect the Telegram token never enters a sandbox. Telegram messages carry only the status and the Task name, never command output.
 
-Задача — отдельная сущность, она живёт дольше сессий. У задачи есть свой worktree и ветка, список сессий и цепочка handoff-документов.
+### D7. Event archive
 
-Handoff собирается из двух частей:
+The Event files are the archive. v1 stores raw Events as JSONL with mode 0600, without normalization, without parsing the Agents' native session files, and without a retention limit; search is `rg`. Raw `PostToolUse` payloads may contain secrets from command output; masking and retention come in v2 together with real search.
 
-- **Автоматическая** (оркестратор): ветка, `git diff --stat`, последние команды и их коды выхода, упавшие тесты.
-- **Смысловая** (модель, через скил `/handoff`): цель, принятые решения, отвергнутые варианты, следующие шаги, открытые вопросы.
+### D8. Terminal: Guake now, tmux as an experiment
 
-Новая сессия любого агента начинается с последнего handoff в первом сообщении.
+`baton new` opens a Guake tab (`guake -n … -r <project>/<task>:<agent> -e <command>`) that runs the Agent directly. The tab title is static; live status is in `baton ls` and notifications. Clicking a notification does not switch tabs: Guake addresses tabs by index, which shifts as tabs close.
 
-### Р6. Лимиты
+tmux is not installed today. It is tried for a week inside Guake with an "invisible" config (`mouse on`, `status off`, large `history-limit`). The Terminal is a replaceable part of `baton new`: "the tab runs the command directly" or "the tab attaches to tmux". tmux, or `dtach`/`abduco`, becomes necessary only for the v2 web terminal.
 
-Точного источника нет. Лимиты собираются по возможности: из вывода `/usage` и `/status`, из данных statusline и из подсчёта собственных событий. В интерфейсе они помечаются как «оценка, обновлено N минут назад». Это последний этап MVP.
+## Risks
 
-### Р7. Guake
-
-Сессии живут в tmux, а вкладка Guake только подключается к ним через `tmux attach -t <сессия>`. Вкладками управляем через CLI Guake (`guake -n`, `-e`, `-r`) или через D-Bus. Имя вкладки строится как `<проект>/<задача>:<агент>`. Если Guake упадёт, сессии продолжат работать, и к ним можно будет подключиться по SSH.
-
-### Р8. Уведомления и единые правила подтверждений
-
-**Уведомления.** Это дешёвая функция с большой пользой, потому что статусы из хуков уже есть. Каналы: рабочий стол (`notify-send`) и Telegram. Правила задаются в одном файле: какие события (`waiting_approval`, `waiting_input`, `done`, `failed`), в какой канал и когда тихие часы. По умолчанию, если вы долго не трогаете клавиатуру или задача ночная, уведомления идут в Telegram.
-
-**Правила подтверждений.** Один файл политики `policy.yaml` в источнике конфигов задаёт три списка: что разрешено всегда, что запрещено всегда, что спрашивать у человека.
-
-- Из политики генерируются нативные настройки: разрешения в `.claude/settings.json` и режим подтверждений и песочницы у Codex.
-- Общий хук `PreToolUse` у обоих агентов спрашивает демон и получает решение. Это единая точка контроля, даже если нативные модели разрешений у агентов различаются.
-- Если по политике нужно спросить человека, демон отправляет запрос в дашборд и Telegram, а хук ждёт ответа с таймаутом. Если ответа нет, действие отклоняется.
-
-Что проверить: максимальное время ожидания хуков у каждого агента и как каждый из них ведёт себя при отказе.
-
-### Р9. Чекпоинты и откат
-
-После каждого хода агента (событие `Stop` или конец хода в headless) демон делает снимок worktree и записывает его в скрытую ссылку git `refs/orch/<задача>/<n>`. Ветка задачи остаётся чистой, а в метаданных снимка указано, какой агент и в какой сессии внёс изменения.
-
-- `orch undo [n]` откатывает worktree к снимку.
-- `orch diff --since <n>` показывает, что изменилось с этого снимка.
-- Последний снимок автоматически попадает в handoff.
-
-У Claude Code есть свои чекпоинты, но они не видят изменений, сделанных Codex. Поэтому нужен общий слой на уровне git.
-
-### Р10. Slash-команды и субагенты
-
-Это продолжение генератора из Р3. Форматы здесь расходятся сильнее, чем у скилов, поэтому в источнике у каждой сущности свой нейтральный формат, а генератор переводит его для каждого агента.
-
-| Что | Источник | Claude Code | Codex |
-| --- | --- | --- | --- |
-| Slash-команды | `commands/<имя>.md`: frontmatter и текст промпта с плейсхолдерами аргументов | `.claude/commands/` | `~/.codex/prompts/`, только на уровне пользователя |
-| Субагенты | `agents/<имя>.md`: роль, инструкции, разрешённые инструменты, модель | `.claude/agents/*.md` | `.codex/agents/*.toml` |
-
-Правила для субагентов (что им можно, сколько их одновременно, какой агент их запускает) хранятся в той же политике, что и в Р8.
-
-Что проверить: у Codex prompts нельзя положить в репозиторий. Нужно решить, превращать ли командные промпты для Codex в скилы или ставить их в пользовательскую папку при `orch sync`.
-
-### Р11. Журнал решений и заметок
-
-Handoff передаёт контекст задачи, а журнал передаёт контекст проекта: принятые решения, договорённости, известные ловушки. Журнал живёт дольше задач и попадает в каждую новую сессию любого агента.
-
-- Запись: `дата · тема · решение · почему · ссылка на задачу или сессию`. Запись типа «заметка» не содержит решения.
-- Записи добавляют скил `/decide` (агент предлагает запись, человек подтверждает), команда `orch note` и сообщение в Telegram.
-- В сессию попадают не все записи, а свёртка: актуальные решения плюс последние N заметок. `AGENTS.md` ссылается на файл свёртки, которую генерирует `orch sync`.
-
-| Вариант хранения | Плюсы | Минусы |
+| Risk | Likelihood | Mitigation |
 | --- | --- | --- |
-| В репозитории (`docs/decisions/`) | Версионируется вместе с кодом, видна команде | Шум в истории коммитов |
-| В `~/.orch/projects/<проект>/` | Личное, не мешает репозиторию | Не переживает смену машины без синхронизации |
+| A CLI update renames hook events or changes payloads | High | Hooks only append raw Events; all mapping lives in one Go table (D2) with tests on recorded payloads. Pinned CLI versions in `ai-sandbox` |
+| Scope creep into an "IDE for agents" | High | v1 is five goals; everything else is listed in v2 with no design work until v1 is used daily |
+| `AI_SANDBOX_PRINT_ARGS` format changes | Low | It is covered by `ai-sandbox`'s own tests; ADR 0001 marks it as a contract |
+| An Agent in a sandbox tampers with Baton files of its Project | Low | Only that Project's directory is mounted; the binary is read-only; Events are an audit trail, not a security boundary |
+| Secrets in the Event archive or in Profiles | Medium | 0600 files, no command output in Telegram, secrets reach a Profile only through its tags |
+| Sync overwrites something it does not own | Medium | Manifest of owned files; stop on any foreign file |
+| Codex Sessions in a new sandbox stay invisible | Medium | `baton ls` flags Codex Sessions without Events and points to `/hooks` |
+| Terms-of-use violation | Low while personal | Official CLIs only, no tokens in code, API keys removed from the environment, everything for one user |
 
-**Рекомендация:** решения хранить в репозитории, а личные заметки — в `~/.orch`.
+## v1 plan
 
-### Р12. Очередь, планировщик и ночные запуски
+Four stages; each is usable on its own.
 
-**Очередь.** Задача ставится в очередь с приоритетом, предпочтительным агентом и runtime. Демон запускает задачи, пока не упрётся в ограничения: не больше N сессий одновременно, не больше одной на worktree, лимиты агента не исчерпаны. Если сессия упала, задача запускается повторно с ограничением на число попыток, с последнего чекпоинта и с handoff.
+1. **`baton sync`.** Source repository, Profiles with tags, secrets, manifest of owned files; instructions, skills, MCP and status hooks for host Profiles and sandbox Profiles; config fragments for the sandbox.
+   - Done when one skill and one MCP server added to the source show up, after `baton sync`, in the right host Profiles according to tags and in Codex inside a Project's sandbox.
+2. **Sessions and statuses.** `baton hook`, Event files, Projects, Tasks and Working copies, `baton new` with a Guake tab in both Environments, `baton ls`.
+   - Done when `baton new <project> --agent codex` opens a Guake tab with Codex in the sandbox, and `baton ls` shows live statuses of that Session and of a `claude-personal` Session started by hand.
+3. **Watcher and notifications.** `baton watch` under `systemd --user`, desktop notifications, `lost` detection, `baton away`/`baton back` with one-way Telegram.
+   - Done when an approval request from Codex in the sandbox produces a desktop notification, and a Telegram message after `baton away`.
+4. **Handoff.** `baton handoff`, the `/handoff` skill, `baton handoff save`, start of the receiving Session with the Handoff as its first message.
+   - Done when a Task started in Claude continues in Codex with one command and no manual copying.
 
-**Планировщик.** Хранит cron-выражения в базе (`orch schedule add "0 2 * * *" <задача>`). Работает внутри демона, а для надёжности ещё и через systemd timer, который поднимает демон, если он не запущен.
+## v2 and later
 
-**Ночной режим.** Он отличается от дневного:
+| What | Why it waits |
+| --- | --- |
+| Daemon with API and state; web dashboard with an embedded terminal | Needs attachable Terminals (tmux or `dtach`) and a frontend stack |
+| Two-way Telegram bot: approvals, new Tasks | Remote control of the machine; needs the approval flow and `policy.yaml` first |
+| Unified permission policy (`policy.yaml`) with a shared `PreToolUse` hook | The Agents' permission models differ; inside the sandbox `ai-sandbox` modes already act as the Policy |
+| Slash commands and subagents in `baton sync` | Formats diverge; Codex prompts are user-level only |
+| Headless Sessions, queue, scheduler, night runs with a `night` Policy and budget | Unattended irreversible actions; first prove the daytime Policy. Until then, a cron script with `claude -p` if a night job is needed |
+| Per-turn checkpoints in `refs/baton/…` and `baton undo` | Claude Code has its own checkpoints; cross-Agent undo matters mostly at Handoff time |
+| Worktrees inside the sandbox | Needs `ai-sandbox` to mount the Project at its host path (generic mechanism), so git worktree paths resolve |
+| Shared vs per-Project sandbox Profiles | One login and history everywhere vs isolation between Projects; to be discussed |
+| Limit snapshots and automatic Agent/Profile switch on limit | No reliable source of limits; manual Handoff first shows whether switching is frequent |
+| Normalized archive, search, secret masking, retention | `rg` over raw Events may be enough |
+| Jump to the Guake tab from a notification; live status in tab titles | Needs a stable tab ↔ Session link |
+| Re-evaluate Agent Deck and similar tools | After the tmux experiment |
+| Quality gates and cross-review, full worktree lifecycle, cost per Task, evals, integrations, several machines | Unchanged from the first draft |
 
-- Только headless, без TUI.
-- Отдельная строгая политика: нет `git push` и сетевых действий вне списка, всё, что требует подтверждения, по умолчанию отклоняется или откладывается до утра.
-- Бюджет на ночь: число задач, время на задачу, доля лимита, которую можно потратить.
-- Утром в Telegram приходит сводка: что сделано, что упало, что ждёт решения, ссылки на diff.
+## Open questions
 
-**Переключение агента по лимиту.** Если агент вернул ошибку лимита или оценка лимита близка к нулю, демон делает чекпоинт и handoff. Затем он либо предлагает продолжить на другом агенте (днём), либо делает это сам, если задача это разрешает (ночью). Переключение записывается в историю задачи.
+- [ ] Does `codex` accept an initial prompt as a positional argument in interactive mode? Needed for D5. [unverified]
+- [ ] What does the `NEW_TAB` argument of `guake -n` mean exactly (working directory or something else)? Needed for D8. [unverified]
+- [ ] tmux experiment result: does it stay as the default Terminal?
+- [ ] Shared vs per-Project sandbox Profiles in v2.
+- [ ] Support for other Agents (Gemini CLI, OpenCode)?
 
-### Р13. Веб-дашборд и Telegram-бот
+## Sources
 
-Все интерфейсы — CLI, веб, Telegram и Guake — работают как клиенты одного API демона. Ни один из них не хранит своего состояния.
-
-**Веб-дашборд** — основная точка входа.
-
-- Экраны: проекты, задачи и очередь, сессии со статусами, запросы на подтверждение, журнал решений, расписание, лимиты.
-- Встроенный терминал: xterm.js плюс `tmux attach` через WebSocket (как у ttyd). Это та же сессия, что открыта во вкладке Guake, поэтому из браузера можно работать в родном TUI агента.
-- Обновления приходят в реальном времени из шины событий демона через WebSocket или SSE.
-- Доступ: по умолчанию только `127.0.0.1`. Для телефона — через VPN вроде Tailscale или WireGuard, без проброса портов в интернет.
-
-**Telegram-бот** — доступ с телефона без VPN.
-
-- Работает через long polling, поэтому не нужен публичный адрес.
-- Принимает сообщения только из вашего chat\_id, все остальные игнорирует.
-- Команды: `/status`, `/tasks`, `/new <проект> <задача>`, `/approve` и `/deny` (кнопками под запросом), `/note`, `/handoff <задача>`.
-- Чего бот не делает: не выполняет произвольные shell-команды и не пересылает вывод терминала целиком, только сводки и ссылки на дашборд.
-
-Открытый вопрос: нужен ли вдобавок TUI-дашборд для вкладки Guake, или хватит веба и `orch ls`.
-
-## Модель данных
-
-Сущности связаны так: проект → задача → сессия → событие. Handoff привязан к задаче. Хранилище — SQLite для индекса и состояния и JSONL-файлы для сырых событий в `~/.orch/`.
-
-| Сущность | Ключевые поля | Где хранится |
-| --- | --- | --- |
-| Project | id, путь к репозиторию, runtime по умолчанию (host / docker), образ | SQLite |
-| Task | id, project\_id, заголовок, статус, приоритет, предпочтительный агент, ветка, путь к worktree, разрешено ли автопереключение | SQLite |
-| Session | id, task\_id, агент (claude / codex), runtime, режим (tui / headless / night), нативный session\_id, имя tmux-сессии, статус, время начала и конца | SQLite |
-| Event | session\_id, ts, тип (prompt, tool\_call, tool\_result, message, status, usage), payload | `~/.orch/events/<session>.jsonl` плюс индекс в SQLite |
-| Handoff | id, task\_id, from\_session, автоматическая часть, смысловая часть (markdown) | `~/.orch/handoffs/<task>/<n>.md` плюс строка в SQLite |
-| Checkpoint | id, task\_id, session\_id, агент, git-ссылка, ts | git `refs/orch/…` плюс строка в SQLite |
-| Decision / Note | id, project\_id, дата, тема, текст, почему, ссылка на задачу или сессию, тип | `docs/decisions/` в репозитории или `~/.orch/projects/…` плюс индекс |
-| QueueItem | task\_id, приоритет, агент, runtime, попытки, not\_before | SQLite |
-| Schedule | id, cron, шаблон задачи, политика (day / night), бюджет | SQLite |
-| ApprovalRequest | id, session\_id, действие, решение политики, ответ, кто ответил (web / telegram / tui), ts | SQLite |
-| Notification | событие, канал, ts, доставлено | SQLite |
-| LimitSnapshot | агент, ts, источник, значение, степень уверенности | SQLite |
-
-Статусы сессии: `starting`, `running`, `waiting_input`, `waiting_approval`, `idle`, `done`, `failed`. Они выводятся из событий хуков, а не из разбора экрана.
-
-## Риски
-
-Главные риски — частые изменения CLI и разрастание объёма. Оба снижаются тонкими адаптерами и жёстким MVP.
-
-| Риск | Вероятность | Мера |
-| --- | --- | --- |
-| Обновление CLI ломает флаги, события хуков или формат сессий | Высокая | Тонкие адаптеры, закреплённые версии CLI, тест-набор «запустить, отправить промпт, получить события» перед каждым обновлением |
-| Проект разрастается до «IDE для агентов» | Высокая | Этапы MVP с критериями готовности, лимиты в самом конце |
-| Ночной запуск делает необратимое без присмотра | Средняя | Отдельная строгая ночная политика, чекпоинты, никакого push и сетевых действий вне списка |
-| Telegram-бот становится удалённым доступом к машине | Средняя | Только ваш chat\_id, нет произвольных shell-команд, подтверждения только для запросов, созданных политикой |
-| Веб-дашборд доступен из сети | Средняя | Только `127.0.0.1`, снаружи только через VPN, токен на сессию браузера |
-| Хук подтверждения подвешивает агента | Средняя | Таймаут с отказом по умолчанию, проверить лимиты ожидания хуков у каждого агента |
-| Оценка лимитов вводит в заблуждение | Средняя | Показывать источник и время обновления. Автопереключение только для задач, где оно явно разрешено |
-| Нарушение правил использования | Низкая, пока инструмент личный | Только официальные CLI, никаких токенов в коде, явная очистка окружения от API-ключей, бот и дашборд только для себя |
-| Утечка учётных данных через Docker-образ или логи | Средняя | Монтировать креды, а не копировать в образ, маскировать секреты в архиве событий и в сообщениях Telegram |
-| Handoff теряет важный контекст | Средняя | Фиксированный шаблон handoff, журнал решений, возможность открыть сырые события задачи |
-
-## План MVP
-
-Шесть этапов, каждый можно использовать сам по себе. Больше половины пользы дают первые два, особенно уведомления и единые правила подтверждений.
-
-1. **Сессии, статусы, уведомления.** Демон, адаптеры claude и codex для хоста, запуск в tmux, хуки, отправляющие статусы в демон, вкладки Guake, уведомления на рабочий стол.
-   - Готово, когда `orch new <проект> --agent codex` открывает вкладку Guake, `orch ls` показывает живой статус, а ожидание подтверждения вызывает уведомление.
-2. **Единые конфиги и политика.** Генератор для инструкций, скилов, slash-команд, субагентов, хуков, MCP и `policy.yaml`. Общий хук `PreToolUse`, который спрашивает демон.
-   - Готово, когда одна команда или одно правило в источнике работают в обоих агентах после `orch sync`.
-3. **Задачи, handoff, чекпоинты, журнал.** Сущность Task, worktree на задачу, скил `/handoff`, снимки в `refs/orch`, `orch undo`, журнал решений и скил `/decide`.
-   - Готово, когда задачу, начатую в Claude, можно продолжить в Codex одной командой, а ход любого агента можно откатить.
-4. **Очередь, планировщик, Docker, архив.** Очередь с ограничением параллельных сессий, cron и ночной режим со своей политикой, docker-runtime, нормализованный архив событий и поиск по нему.
-   - Готово, когда ночная задача сама выполняется в контейнере, а утром есть её сводка и поиск по её событиям.
-5. **Веб-дашборд и Telegram-бот.** Веб-интерфейс со встроенным терминалом, подтверждения из веба и Telegram, утренняя сводка в Telegram.
-   - Готово, когда с телефона можно увидеть статусы, подтвердить действие и поставить задачу.
-6. **Лимиты и автопереключение.** Снимки лимитов, их отображение в дашборде, переключение агента при исчерпании лимита.
-   - Готово, когда задача, упёршаяся в лимит Claude, продолжается в Codex через handoff без ручного копирования.
-
-## Не вошедшее в первую версию
-
-Это полезно, но откладывается до тех пор, пока не будут готовы шесть этапов MVP.
-
-| Что | Зачем | Почему позже |
-| --- | --- | --- |
-| Проверки качества и перекрёстное ревью | Тесты и линтеры после задачи, Codex проверяет diff от Claude и наоборот | Можно временно сделать задачей в очереди |
-| Полный жизненный цикл worktree | Зависимости, `.env`, порты для dev-серверов, очистка, создание PR | Сильно зависит от проекта, сначала собрать типичные случаи |
-| Учёт расхода по задачам | Сколько лимита или токенов ушло на задачу | Зависит от данных о лимитах (этап 6) |
-| Наблюдаемость | Повтор сессии, метрики, экспорт в OpenTelemetry | Архива событий хватит на первое время |
-| Эвалы | Фиксированный набор задач для проверки после изменения скилов, промптов или версии CLI | Нужен набор реальных задач, его ещё нет |
-| Безопасность Docker | Ограничение сети из контейнера, защита от prompt injection из файлов репозитория | Пока контейнер работает только с вашими проектами |
-| Устойчивость демона | Восстановление после падения, подхват «осиротевших» tmux-сессий, бэкап архива | Частично закрывается тем, что tmux живёт отдельно |
-| Интеграции | Задачи из GitHub Issues, Linear, Jira | Telegram и веб закрывают основной сценарий |
-| Несколько машин | Ноутбук и сервер под одним дашбордом | Это открытый вопрос, решается позже |
-
-## Открытые вопросы
-
-- [ ] Писать всё своё или строить поверх Agent Deck, kage или другого готового решения?
-- [ ] Язык: Python (быстрее начать, SDK обоих агентов) или Go (один бинарник, удобный TUI)? Для веб-дашборда нужен ещё фронтенд-стек.
-- [ ] Нужен ли TUI-дашборд вдобавок к вебу и `orch ls`?
-- [ ] Docker: один контейнер на проект или отдельный на задачу? Ночные задачи всегда в контейнере?
-- [ ] Нужен ли агент-оркестратор, который сам раздаёт задачи и проверяет работу, или достаточно очереди и ручного управления?
-- [ ] Что разрешено в ночной политике и какой бюджет лимитов выделяется на ночь?
-- [ ] Подтверждения из Telegram: все действия или только из короткого списка безопасных?
-- [ ] Журнал решений: в репозитории или в `~/.orch`, если репозиторий общий с командой?
-- [ ] Нужны ли несколько машин (ноутбук, сервер), или только одна?
-- [ ] Сколько хранить архив событий и нужно ли маскировать секреты уже на первом этапе?
-- [ ] Нужна ли поддержка других агентов (Gemini CLI, OpenCode) или только Claude Code и Codex?
-
-## Источники
-
-- [Claude Code — Legal and compliance](https://code.claude.com/docs/en/legal-and-compliance)
+- [Claude Code: Hooks reference](https://code.claude.com/docs/en/hooks)
+- [Codex: Hooks](https://learn.chatgpt.com/docs/hooks)
+- [Claude Code: Legal and compliance](https://code.claude.com/docs/en/legal-and-compliance)
 - [Use the Claude Agent SDK with your Claude plan](https://support.claude.com/en/articles/15036540-use-the-claude-agent-sdk-with-your-claude-plan)
-- [Codex — Pricing](https://developers.openai.com/codex/pricing)
-- [openai/codex issue #36886 — подписка и внутренний эндпоинт](https://github.com/openai/codex/issues/36886)
+- [Codex: Pricing](https://developers.openai.com/codex/pricing)
+- [openai/codex issue #36886: subscription and the internal endpoint](https://github.com/openai/codex/issues/36886)
 - [Agent Session Managers for Codex CLI](https://codex.danielvaughan.com/2026/05/05/codex-cli-session-managers-ccmanager-agent-deck-parallel-agent-orchestration/)
 - [kage](https://pkg.go.dev/github.com/Sean0628/kage)
 - [git-paw](https://docs.rs/crate/git-paw/latest)
-- [agent-cli-starter — сравнение Claude Code и Codex](https://github.com/youngjin39/agent-cli-starter)
-- [Codex conventions — пути скилов и хуков](https://tomevault.io/tome/xiaolai/nlpm/conventions-codex)
+- [agent-cli-starter](https://github.com/youngjin39/agent-cli-starter)
 - [Agent Skills Open Standard](https://codex.danielvaughan.com/2026/05/05/agent-skills-open-standard-portable-skills-codex-cli-cross-agent/)
+- [loadkpi/ai-sandbox](https://github.com/loadkpi/ai-sandbox)
