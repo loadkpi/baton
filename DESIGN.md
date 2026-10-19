@@ -176,7 +176,7 @@ A Handoff lives in `~/.baton/projects/<project>/handoffs/<task>/<n>.md`, never i
 - **Automatic part** (`baton handoff`): Task, Working copy, branch, HEAD, `git status`, `git diff --stat`, the last 10 commands with exit codes taken from Events, a link to the Session's Event file.
 - **Narrative part** (the `/handoff` skill, which pipes Markdown into `baton handoff save`): goal; what is done; decisions and why; rejected options and why; the next step (one, concrete); open questions; how to verify the result. `baton handoff save` finds the Task from the current directory (D1).
 - **If the handing-over Session could not write the narrative part** (for example, its limit ran out), the receiving Session writes it on its first turn from the automatic part and the Event tail. The header records who wrote it.
-- `baton handoff <task> --to <agent>[@<profile>]` writes the automatic part, ends nothing, and opens a new Session whose first message is "continue the Task from Handoff `<path>`".
+- `baton handoff <task> --to <agent>[@<profile>]` writes the automatic part and, if the Task's Session is still active, prints "waiting for Session X to end" and waits until it gets `SessionEnd` or its process dies. Only then it opens a new Session whose first message is "continue the Task from Handoff `<path>`". In practice you type `/exit` in the old tab and the new tab opens. This keeps the one-active-Session rule (D1).
 
 Collecting failed tests (first draft D5) is dropped for v1: parsing test output of different projects costs more than exit codes give.
 
