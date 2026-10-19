@@ -1,6 +1,6 @@
 # ai-sandbox knows nothing about Baton
 
-The `sandbox` Environment in Baton is the existing `ai-sandbox` project (public `loadkpi/ai-sandbox`), not a custom image. The sandbox stays a standalone tool that works without Baton: it never mentions Baton, and Baton's hooks inside the container silently do nothing when `~/.baton` is not mounted.
+The `sandbox` Runtime in Baton is the existing `ai-sandbox` project (public `loadkpi/ai-sandbox`), not a custom image. The sandbox stays a standalone tool that works without Baton: it never mentions Baton, and Baton's hooks inside the container silently do nothing when `~/.baton` is not mounted.
 
 Baton plugs into the sandbox in two ways, in this order of preference:
 

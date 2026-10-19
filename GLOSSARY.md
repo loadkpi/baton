@@ -28,9 +28,9 @@ _Avoid_: orchestrator agent, conductor, coordinator, orch
 A git repository that Baton knows about. A Project has Working copies and Tasks.
 _Avoid_: repo, workspace
 
-**Environment**:
-Where an Agent runs: on the host (`host`) or in the project's sandbox (`sandbox`). Not to be confused with environment variables.
-_Avoid_: runtime, Docker, container
+**Runtime**:
+Where an Agent runs: on the host (`host`) or in the project's sandbox (`sandbox`).
+_Avoid_: environment, Docker, container
 
 **Working copy**:
 A directory with the Project's files where an Agent works: the main checkout or a worktree. At most one Session is active in a Working copy at any time.

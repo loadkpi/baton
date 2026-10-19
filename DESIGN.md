@@ -22,7 +22,7 @@ What hurts today:
 **Goals for v1**
 
 1. One source of instructions, skills, MCP servers and hooks, rendered into every Profile on the host and in project sandboxes (`baton sync`).
-2. Start Sessions of either Agent in either Environment (`host`, `sandbox`) in a named Guake tab.
+2. Start Sessions of either Agent in either Runtime (`host`, `sandbox`) in a named Guake tab.
 3. A live list of Sessions and their statuses across all Profiles and Projects (`baton ls`), including Sessions started by hand outside Baton.
 4. Desktop notifications when an Agent waits for approval or for input; one-way Telegram messages while you are away.
 5. Manual Handoff of a Task from one Session to another, across Agents and Profiles.
@@ -105,7 +105,7 @@ flowchart LR
   bin/baton                   # mounted read-only into sandboxes
   sync-manifest.json          # files created by baton sync, per Profile
   projects/<project>/         # mounted read-write into this project's sandbox only
-    project.toml              # path, default Environment
+    project.toml              # path, default Runtime
     tasks/<task>.toml         # title, status
     working-copies.toml       # current Task of each Working copy
     sessions/<session>.jsonl  # raw Events, mode 0600
@@ -116,7 +116,7 @@ flowchart LR
 
 ### D1. Domain model
 
-Project → Working copy → Task → Session → Event. A Session also has an Agent, a Profile and an Environment.
+Project → Working copy → Task → Session → Event. A Session also has an Agent, a Profile and a Runtime.
 
 - **A Session is one native conversation.** `/clear` or switching conversations inside the same Terminal starts a new Session of the same Task.
 - **At most one active Session per Working copy.** Parallel work means separate Tasks in separate Working copies. This also makes it unambiguous whose turn changed the files.
@@ -138,11 +138,11 @@ Five statuses, all derived from the last Event. Hook names below were checked ag
 
 The first draft also had `starting`, `idle`, `done` and `failed`. `idle` is the same as `waiting_input`; "done" belongs to the Task (D1); `starting` cannot be observed reliably; `failed` returns in v2 with headless Sessions. Codex has no "waiting for input" hook, which is why `Stop` is the common signal.
 
-### D3. Environments: host and sandbox
+### D3. Runtimes: host and sandbox
 
-The `sandbox` Environment is `ai-sandbox`, not a custom image. `ai-sandbox` knows nothing about Baton ([ADR 0001](docs/adr/0001-ai-sandbox-knows-nothing-about-baton.md)): Baton uses generic mechanisms that make sense without it (extra mounts, config fragments), or wraps `run.sh` through `AI_SANDBOX_PRINT_ARGS`.
+The `sandbox` Runtime is `ai-sandbox`, not a custom image. `ai-sandbox` knows nothing about Baton ([ADR 0001](docs/adr/0001-ai-sandbox-knows-nothing-about-baton.md)): Baton uses generic mechanisms that make sense without it (extra mounts, config fragments), or wraps `run.sh` through `AI_SANDBOX_PRINT_ARGS`.
 
-- The default Environment is `sandbox` if the Project has `.ai-sandbox/run.sh`, otherwise `host`.
+- The default Runtime is `sandbox` if the Project has `.ai-sandbox/run.sh`, otherwise `host`.
 - Each Project's sandbox keeps its own Profiles (own login and history). Baton unifies history through Events, not through shared config directories.
 - Two directories are mounted into the sandbox: `~/.baton/projects/<project>` read-write and `~/.baton/bin` read-only. Nothing else from `~/.baton`, so a sandbox never sees other Projects.
 - **v1 sandbox Sessions run only in the main checkout.** A git worktree stores the absolute host path to `.git/worktrees/<name>`, which does not exist inside the container (the Project is mounted at `/workspace`), and `.ai-sandbox/` is gitignored, so a worktree has no sandbox at all. The one-active-Session rule (D1) makes this safe.
@@ -221,7 +221,7 @@ Four stages; each is usable on its own.
 
 1. **`baton sync`.** Source repository, Profiles with tags, secrets, manifest of owned files; instructions, skills, MCP and status hooks for host Profiles and sandbox Profiles; config fragments for the sandbox.
    - Done when one skill and one MCP server added to the source show up, after `baton sync`, in the right host Profiles according to tags and in Codex inside a Project's sandbox.
-2. **Sessions and statuses.** `baton hook`, Event files, Projects, Tasks and Working copies, `baton new` with a Guake tab in both Environments, `baton ls`.
+2. **Sessions and statuses.** `baton hook`, Event files, Projects, Tasks and Working copies, `baton new` with a Guake tab in both Runtimes, `baton ls`.
    - Done when `baton new <project> --agent codex` opens a Guake tab with Codex in the sandbox, and `baton ls` shows live statuses of that Session and of a `claude-personal` Session started by hand.
 3. **Watcher and notifications.** `baton watch` under `systemd --user`, desktop notifications, `lost` detection, `baton away`/`baton back` with one-way Telegram.
    - Done when an approval request from Codex in the sandbox produces a desktop notification, and a Telegram message after `baton away`.
