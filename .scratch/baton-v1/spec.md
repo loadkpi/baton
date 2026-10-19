@@ -119,6 +119,7 @@ A single Go binary, `baton`, with no stateful Daemon. All state lives in files u
 - A Session is one native conversation (one native session id).
 - At most one active Session per Working copy.
 - The current Task of a Working copy is recorded by `baton new`; a Session in a Working copy belongs to its current Task; no record → create an unnamed Task and make it current; the current Task changes only when no Session is active there.
+- A Session in a git repository Baton does not know yet registers that Project automatically by its git root.
 - Task status is stored as `open` / `done` / `dropped`; activity is derived from Sessions.
 - v1 sandbox Sessions run only in the Project's main checkout (worktree paths do not resolve inside the container, and `.ai-sandbox/` is gitignored).
 
@@ -155,7 +156,7 @@ A single Go binary, `baton`, with no stateful Daemon. All state lives in files u
 **Handoff**
 
 - Stored under `~/.baton/projects/<project>/handoffs/<task>/<n>.md`.
-- Automatic part by `baton handoff`; narrative part by the `/handoff` skill through `baton handoff save` (stdin), Task resolved from the current directory; receiver fills the narrative part if missing; header records the author.
+- Automatic part by `baton handoff`; narrative part by the `/handoff` skill through `baton handoff save` (stdin). The skill ships with Baton as a built-in item that `baton sync` installs into every Profile regardless of tags; it is not part of the user's source repository, Task resolved from the current directory; receiver fills the narrative part if missing; header records the author.
 - If the Task's Session is still active, `baton handoff` prints that it is waiting and blocks until that Session gets `SessionEnd` or its process dies; only then it opens the receiving Session. This keeps the one-active-Session-per-Working-copy rule.
 - The receiving Session starts with "continue the Task from Handoff `<path>`" as its first message.
 

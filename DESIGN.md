@@ -121,6 +121,7 @@ Project → Working copy → Task → Session → Event. A Session also has an A
 - **A Session is one native conversation.** `/clear` or switching conversations inside the same Terminal starts a new Session of the same Task.
 - **At most one active Session per Working copy.** Parallel work means separate Tasks in separate Working copies. This also makes it unambiguous whose turn changed the files.
 - **The Working copy determines the Task.** `baton new` records "the current Task of Working copy X is T" in `~/.baton`. Every Session in X belongs to T, whether Baton started it or you ran `claude-personal` by hand. Without a record, an unnamed Task is created and becomes current. The current Task of a Working copy can change only when no Session is active there. No environment variables are involved, so it works inside the sandbox too.
+- **Unknown repositories register themselves.** A Session in a git repository Baton does not know yet registers that Project by its git root, so Sessions started by hand are never lost.
 - **Tasks are cheap.** `baton new <project>` without a name creates an unnamed Task (`<project>/2026-10-20-1`) that can be named later.
 - **Task status is what a human decides:** `open`, `done`, `dropped`. Whether a Task is "running" or "waiting" is derived from its active Session, never stored.
 
@@ -174,7 +175,7 @@ Slash commands, subagents and a unified permission policy (`policy.yaml`) are v2
 A Handoff lives in `~/.baton/projects/<project>/handoffs/<task>/<n>.md`, never in the Working copy.
 
 - **Automatic part** (`baton handoff`): Task, Working copy, branch, HEAD, `git status`, `git diff --stat`, the last 10 commands with exit codes taken from Events, a link to the Session's Event file.
-- **Narrative part** (the `/handoff` skill, which pipes Markdown into `baton handoff save`): goal; what is done; decisions and why; rejected options and why; the next step (one, concrete); open questions; how to verify the result. `baton handoff save` finds the Task from the current directory (D1).
+- **Narrative part** (the `/handoff` skill, shipped with Baton as a built-in item that `baton sync` installs into every Profile; it pipes Markdown into `baton handoff save`): goal; what is done; decisions and why; rejected options and why; the next step (one, concrete); open questions; how to verify the result. `baton handoff save` finds the Task from the current directory (D1).
 - **If the handing-over Session could not write the narrative part** (for example, its limit ran out), the receiving Session writes it on its first turn from the automatic part and the Event tail. The header records who wrote it.
 - `baton handoff <task> --to <agent>[@<profile>]` writes the automatic part and, if the Task's Session is still active, prints "waiting for Session X to end" and waits until it gets `SessionEnd` or its process dies. Only then it opens a new Session whose first message is "continue the Task from Handoff `<path>`". In practice you type `/exit` in the old tab and the new tab opens. This keeps the one-active-Session rule (D1).
 
