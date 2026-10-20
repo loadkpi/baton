@@ -52,6 +52,9 @@ type handoffArgs struct {
 // it waits for the Task's active Session to end, writes the Handoff and opens a
 // Session of the other Agent or Profile that continues from it.
 func runHandoff(ctx context.Context, c console, home string, args []string) int {
+	if len(args) > 0 && args[0] == "save" {
+		return runHandoffSave(ctx, c, home, args[1:])
+	}
 	parsed, err := parseHandoffArgs(args)
 	if err != nil {
 		return c.usagef("handoff: %v (%s)", err, handoffUsage)

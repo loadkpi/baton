@@ -82,6 +82,13 @@ func (e *Env) RunWithEnv(extra []string, stdin string, args ...string) Result {
 	return e.runEnv(extra, stdin, e.bin, args...)
 }
 
+// RunIn is RunWithEnv in the directory dir instead of HOME, for the commands
+// that find their Task from the current directory.
+func (e *Env) RunIn(dir string, extra []string, stdin string, args ...string) Result {
+	e.t.Helper()
+	return e.runIn(dir, extra, stdin, e.bin, args...)
+}
+
 // RunProgram runs any program from the Env's PATH with extra environment
 // variables ("NAME=value") and the given standard input, in HOME.
 func (e *Env) RunProgram(extra []string, stdin, name string, args ...string) Result {
@@ -103,11 +110,16 @@ func (e *Env) run(stdin, name string, args ...string) Result {
 
 func (e *Env) runEnv(extra []string, stdin, name string, args ...string) Result {
 	e.t.Helper()
+	return e.runIn(e.Home, extra, stdin, name, args...)
+}
+
+func (e *Env) runIn(dir string, extra []string, stdin, name string, args ...string) Result {
+	e.t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
 	cmd := exec.CommandContext(ctx, e.lookPath(name), args...)
-	cmd.Dir = e.Home
+	cmd.Dir = dir
 	cmd.Env = append(e.Environ(), extra...)
 	cmd.Stdin = strings.NewReader(stdin)
 	var stdout, stderr bytes.Buffer

@@ -17,11 +17,12 @@ import (
 	"github.com/loadkpi/baton/business/types/runtime"
 )
 
-// containerRootVar names the one environment variable `baton hook` reads: the
-// directory that stands for the root of the container, "/" when it is not set.
-// It exists so that tests, which cannot write to /baton, can put the mount of a
-// sandbox container somewhere else. It is read only for --runtime sandbox, so
-// it has no effect on a host Session, and nothing else reads it.
+// containerRootVar names the one environment variable Baton reads for the
+// mount of a sandbox container: the directory that stands for the root of the
+// container, "/" when it is not set. It exists so that tests, which cannot
+// write to /baton, can put the mount somewhere else. Two commands read it:
+// `baton hook --runtime sandbox`, so it has no effect on a host Session, and
+// `baton handoff save`, which is in a sandbox when the mount is there.
 const containerRootVar = "BATON_CONTAINER_ROOT"
 
 // runHook implements `baton hook <agent> --profile <name> --runtime <runtime>`,

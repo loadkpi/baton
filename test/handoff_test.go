@@ -62,6 +62,10 @@ func handoffFile(env *batontest.Env, n string) string {
 	return env.Path(".baton", "projects", "my-app", "handoffs", "2031-03-04-1", n+".md")
 }
 
+// askForNarrative ends the first message of a Handoff that has no narrative
+// part: the receiving Session is asked to write it.
+const askForNarrative = ". Its narrative part is missing: before you start, write it from the Facts section, the Event file and the git history, and save it with the baton-handoff skill (it pipes the Markdown to baton handoff save)"
+
 func TestHandoff_ToAnotherClaudeProfileWritesTheHandoffAndOpensATabThatPointsToIt(t *testing.T) {
 	env := newEnv(t)
 	repo := handoffProject(t, env)
@@ -76,7 +80,7 @@ func TestHandoff_ToAnotherClaudeProfileWritesTheHandoffAndOpensATabThatPointsToI
 		t.Errorf("handoff = %q, want the header to say narrative: missing", env.ReadFile(path))
 	}
 	want := "cd " + repo + " && env -u ANTHROPIC_API_KEY -u OPENAI_API_KEY CLAUDE_CONFIG_DIR=" + env.Path(".claude-work") +
-		" claude 'continue the Task from Handoff " + path + "'"
+		" claude 'continue the Task from Handoff " + path + askForNarrative + "'"
 	if line := typedLine(t, env); line != want {
 		t.Errorf("tab line = %q, want %q", line, want)
 	}
@@ -229,6 +233,10 @@ func TestHandoff_ASavedDraftBecomesTheNarrativePartAndIsRemoved(t *testing.T) {
 	}
 	if env.Exists(draft) {
 		t.Error("draft.md is still there")
+	}
+	// The narrative is there, so the receiver is not asked to write one.
+	if line := typedLine(t, env); strings.Contains(line, "narrative part is missing") || !strings.HasSuffix(line, "1.md'") {
+		t.Errorf("tab line = %q, want the plain first message", line)
 	}
 }
 
@@ -389,7 +397,7 @@ func TestHandoff_ToCodexInTheSandboxTheFirstMessageNamesTheHandoffAsTheContainer
 	runs := dockerCalls(env, "run")
 	last := runs[len(runs)-1]
 	wantTail := []string{imageTag, "env", "-u", "ANTHROPIC_API_KEY", "-u", "OPENAI_API_KEY", "codex",
-		"continue the Task from Handoff /baton/project/handoffs/" + task + "/1.md"}
+		"continue the Task from Handoff /baton/project/handoffs/" + task + "/1.md" + askForNarrative}
 	if got := last[len(last)-len(wantTail):]; strings.Join(got, "\n") != strings.Join(wantTail, "\n") {
 		t.Errorf("end of the docker command = %q, want %q", got, wantTail)
 	}

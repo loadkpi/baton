@@ -553,7 +553,7 @@ func TestSandboxSync_AManifestPerSandboxProfileRecordsEveryOwnedFileAndHook(t *t
 	for _, f := range manifest.Files {
 		files = append(files, f.Path)
 	}
-	want := []string{"../.agents/skills/greet/SKILL.md", "AGENTS.d/baton.md", "config.d/baton.toml"}
+	want := []string{"../.agents/skills/baton-handoff/SKILL.md", "../.agents/skills/greet/SKILL.md", "AGENTS.d/baton.md", "config.d/baton.toml"}
 	if manifest.Profile != "app.codex" || !reflect.DeepEqual(files, want) {
 		t.Errorf("manifest = %+v, want Profile app.codex with files %v", manifest, want)
 	}

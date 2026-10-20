@@ -1,6 +1,7 @@
 package handoffbus
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -121,6 +122,37 @@ func (d document) render() []byte {
 		b.WriteString(strings.TrimSpace(d.NarrativeText) + "\n")
 	}
 	return []byte(b.String())
+}
+
+// withNarrative puts text into a Handoff file whose narrative part is missing:
+// the header says `narrative: receiving` and everything after the narrative
+// heading is replaced by text. missing is false, and file is returned as it
+// is, when the Handoff already has a narrative part.
+func withNarrative(file []byte, text string) (filled []byte, missing bool, err error) {
+	s := string(file)
+	end := -1
+	if strings.HasPrefix(s, "---\n") {
+		if i := strings.Index(s[len("---\n"):], "\n---\n"); i >= 0 {
+			end = len("---\n") + i + 1
+		}
+	}
+	if end < 0 {
+		return nil, false, errors.New("the file has no header")
+	}
+	const missingLine = "\nnarrative: missing\n"
+	header := s[:end]
+	if !strings.Contains(header, missingLine) {
+		return file, false, nil
+	}
+	// The last heading: a command in the facts could hold the same line, but
+	// while the narrative is missing, nothing after the real one does.
+	heading := strings.LastIndex(s, "\n"+NarrativeHeading+"\n")
+	if heading < end {
+		return nil, false, errors.New("the file has no " + NarrativeHeading + " section")
+	}
+	header = strings.Replace(header, missingLine, "\nnarrative: "+string(NarrativeReceiving)+"\n", 1)
+	body := s[end : heading+1+len(NarrativeHeading)+1]
+	return []byte(header + body + "\n" + strings.TrimSpace(text) + "\n"), true, nil
 }
 
 func orElse(s, fallback string) string {

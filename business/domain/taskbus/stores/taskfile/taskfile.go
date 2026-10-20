@@ -30,6 +30,9 @@ const switchVersion = 1
 // Store keeps the records of every Project under <baton dir>/projects.
 type Store struct {
 	dir string
+	// mounted, when set, is the directory of the one Project this Store
+	// knows, wherever it is: the Project name is not used to find it.
+	mounted string
 }
 
 // New creates the storage. batonDir is the Baton state directory (~/.baton).
@@ -37,7 +40,17 @@ func New(batonDir string) *Store {
 	return &Store{dir: filepath.Join(batonDir, "projects")}
 }
 
+// NewMounted creates the storage inside a container, where the Project's Baton
+// directory is mounted at projectDir. The name of the Project is not known
+// there and not used: every Project name stands for that directory.
+func NewMounted(projectDir string) *Store {
+	return &Store{mounted: projectDir}
+}
+
 func (s *Store) projectDir(p projectname.Name) string {
+	if s.mounted != "" {
+		return s.mounted
+	}
 	return filepath.Join(s.dir, p.String())
 }
 

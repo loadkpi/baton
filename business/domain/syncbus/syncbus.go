@@ -238,6 +238,9 @@ func (b *Bus) Sync(ctx context.Context, cfg configbus.Config, targets []Target) 
 	if err != nil {
 		return Result{}, fmt.Errorf("read source: %w", err)
 	}
+	if source.Skills, err = withBuiltinSkills(source.Skills); err != nil {
+		return Result{}, err
+	}
 
 	secrets, err := b.storer.QuerySecrets(ctx)
 	if err != nil {

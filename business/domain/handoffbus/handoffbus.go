@@ -42,6 +42,12 @@ type Storer interface {
 	QueryDraft(ctx context.Context, project projectname.Name, task taskid.ID) (text string, ok bool, err error)
 	// QueryNext returns the number the Task's next Handoff gets.
 	QueryNext(ctx context.Context, project projectname.Name, task taskid.ID) (int, error)
+	// QueryLatest returns the number and the content of the Task's latest
+	// Handoff; ok is false when there is none.
+	QueryLatest(ctx context.Context, project projectname.Name, task taskid.ID) (n int, data []byte, ok bool, err error)
+	// SaveDraft replaces the draft atomically, readable by its owner only,
+	// and returns its path.
+	SaveDraft(ctx context.Context, project projectname.Name, task taskid.ID, data []byte) (path string, err error)
 	// SaveHandoff writes the n-th Handoff of the Task atomically, readable
 	// by its owner only, and returns its path on the host.
 	SaveHandoff(ctx context.Context, project projectname.Name, task taskid.ID, n int, data []byte) (path string, err error)
@@ -217,7 +223,7 @@ func (b *Bus) Complete(ctx context.Context, p *Plan) (Result, error) {
 		return Result{}, err
 	}
 
-	path, err := b.save(ctx, p, document{
+	path, narrative, err := b.save(ctx, p, document{
 		Created:     b.now(),
 		Project:     project.Name.String(),
 		Task:        p.task.ID.String(),
@@ -255,7 +261,7 @@ func (b *Bus) Complete(ctx context.Context, p *Plan) (Result, error) {
 		Task:    ref,
 		Agent:   p.req.Agent,
 		Profile: p.profile,
-		Prompt:  firstMessage(seen),
+		Prompt:  firstMessage(seen, narrative),
 	})
 	if err != nil {
 		return Result{Path: path}, fmt.Errorf("the Handoff is written to %s, but the receiving Session was not started: %w", path, err)
@@ -264,42 +270,47 @@ func (b *Bus) Complete(ctx context.Context, p *Plan) (Result, error) {
 }
 
 // save numbers the Handoff, joins the automatic part with the draft, writes the
-// file and removes the draft, all under the Task's lock.
-func (b *Bus) save(ctx context.Context, p *Plan, d document) (string, error) {
+// file and removes the draft, all under the Task's lock. It also returns who
+// wrote the narrative part.
+func (b *Bus) save(ctx context.Context, p *Plan, d document) (string, Narrative, error) {
 	project := p.place.Project.Name
 	unlock, err := b.storer.Lock(ctx, project, p.task.ID)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	defer unlock()
 
 	draft, hasDraft, err := b.storer.QueryDraft(ctx, project, p.task.ID)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	d.Narrative = NarrativeMissing
 	if hasDraft && strings.TrimSpace(draft) != "" {
 		d.Narrative, d.NarrativeText = NarrativeHandingOver, draft
 	}
 	if d.Number, err = b.storer.QueryNext(ctx, project, p.task.ID); err != nil {
-		return "", err
+		return "", "", err
 	}
 	path, err := b.storer.SaveHandoff(ctx, project, p.task.ID, d.Number, d.render())
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	if d.Narrative == NarrativeHandingOver {
 		// The draft is in the file now; a later one is for the next Handoff.
 		if err := b.storer.DeleteDraft(ctx, project, p.task.ID); err != nil {
-			return path, fmt.Errorf("the Handoff is written to %s, but removing its draft failed: %w", path, err)
+			return path, d.Narrative, fmt.Errorf("the Handoff is written to %s, but removing its draft failed: %w", path, err)
 		}
 	}
-	return path, nil
+	return path, d.Narrative, nil
 }
 
 // firstMessage is what the receiving Session is told. path is the Handoff as
 // the receiving Runtime sees it. It is one line, because the Terminal types it
-// into a shell.
-func firstMessage(path string) string {
-	return "continue the Task from Handoff " + path
+// into a shell. When nobody wrote the narrative part, the receiver is asked to.
+func firstMessage(path string, narrative Narrative) string {
+	msg := "continue the Task from Handoff " + path
+	if narrative == NarrativeMissing {
+		msg += ". Its narrative part is missing: before you start, write it from the Facts section, the Event file and the git history, and save it with the baton-handoff skill (it pipes the Markdown to baton handoff save)"
+	}
+	return msg
 }

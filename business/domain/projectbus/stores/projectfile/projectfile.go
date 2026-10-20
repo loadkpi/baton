@@ -22,11 +22,25 @@ import (
 // Store keeps Project records in <baton dir>/projects.
 type Store struct {
 	dir string
+	// mounted, when set, is the one Project directory this Store reads: the
+	// Project's Baton directory as a container sees it.
+	mounted string
 }
+
+// MountedProjectName stands for the Project inside a container: the mounted
+// directory does not say what it is called, and nothing there needs the name.
+const MountedProjectName = "project"
 
 // New creates the storage. batonDir is the Baton state directory (~/.baton).
 func New(batonDir string) *Store {
 	return &Store{dir: filepath.Join(batonDir, "projects")}
+}
+
+// NewMounted creates the storage inside a container, where the Project's Baton
+// directory is mounted at projectDir. It knows that one Project, under
+// MountedProjectName, and cannot register or save any.
+func NewMounted(projectDir string) *Store {
+	return &Store{mounted: projectDir}
 }
 
 // fileProject is the document of project.toml. Primitive types only.
@@ -73,6 +87,9 @@ func (s *Store) QuerySandboxScript(_ context.Context, root string) (bool, error)
 // QueryAll reads every <dir>/<name>/project.toml. A directory without one is
 // not a Project record (the Project's other files live next to it).
 func (s *Store) QueryAll(_ context.Context) ([]projectbus.Project, error) {
+	if s.mounted != "" {
+		return s.queryMounted()
+	}
 	entries, err := os.ReadDir(s.dir)
 	if os.IsNotExist(err) {
 		return nil, nil
@@ -101,6 +118,24 @@ func (s *Store) QueryAll(_ context.Context) ([]projectbus.Project, error) {
 		projects = append(projects, p)
 	}
 	return projects, nil
+}
+
+// queryMounted reads the record in the mounted directory. A directory without
+// one holds no Project.
+func (s *Store) queryMounted() ([]projectbus.Project, error) {
+	file := filepath.Join(s.mounted, "project.toml")
+	var fp fileProject
+	if _, err := toml.DecodeFile(file, &fp); err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("%s: %w", file, err)
+	}
+	p, err := toBusProject(MountedProjectName, fp)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", file, err)
+	}
+	return []projectbus.Project{p}, nil
 }
 
 // SaveProject writes <dir>/<name>/project.toml atomically.

@@ -101,7 +101,7 @@ func TestSync_RecordsEveryWrittenFileInTheManifest(t *testing.T) {
 	if res.ExitCode != 0 {
 		t.Fatalf("exit code = %d, stderr=%q", res.ExitCode, res.Stderr)
 	}
-	want := []string{"skills/greet/SKILL.md", "skills/greet/scripts/hello.sh"}
+	want := []string{"skills/baton-handoff/SKILL.md", "skills/greet/SKILL.md", "skills/greet/scripts/hello.sh"}
 	if got := manifestPaths(t, env, "claude-personal"); !slices.Equal(got, want) {
 		t.Errorf("manifest files = %v, want %v", got, want)
 	}
@@ -241,8 +241,8 @@ func TestSync_SourceWithoutSkillsDirectorySyncsNothing(t *testing.T) {
 	if res.ExitCode != 0 {
 		t.Fatalf("exit code = %d, stderr=%q", res.ExitCode, res.Stderr)
 	}
-	if env.Exists(filepath.Join(profile, "skills")) {
-		t.Error("sync created skills/ although the source has no skills")
+	if got := env.ListDir(filepath.Join(profile, "skills")); !slices.Equal(got, []string{"baton-handoff"}) {
+		t.Errorf("skills/ = %v, want only the built-in skill although the source has no skills", got)
 	}
 }
 
@@ -351,7 +351,7 @@ func TestSync_ForeignSkillIsShownAsDiffBackedUpAndReplacedOnYes(t *testing.T) {
 	if got := env.ReadFile(filepath.Join(backup, "skills/greet/notes.txt")); got != "my notes\n" {
 		t.Errorf("backed up notes.txt = %q, want the hand-made version", got)
 	}
-	want := []string{"skills/greet/SKILL.md", "skills/review/SKILL.md"}
+	want := []string{"skills/baton-handoff/SKILL.md", "skills/greet/SKILL.md", "skills/review/SKILL.md"}
 	if got := manifestPaths(t, env, "claude-personal"); !slices.Equal(got, want) {
 		t.Errorf("manifest files = %v, want %v", got, want)
 	}
@@ -432,7 +432,7 @@ func TestSync_RemovingASkillFromTheSourceRemovesItFromTheProfile(t *testing.T) {
 	if got := env.ReadFile(filepath.Join(profile, "skills/synced/theirs/SKILL.md")); got != "Claude's own skill.\n" {
 		t.Errorf("foreign skill = %q, want it untouched", got)
 	}
-	if got, want := manifestPaths(t, env, "claude-personal"), []string{"skills/review/SKILL.md"}; !slices.Equal(got, want) {
+	if got, want := manifestPaths(t, env, "claude-personal"), []string{"skills/baton-handoff/SKILL.md", "skills/review/SKILL.md"}; !slices.Equal(got, want) {
 		t.Errorf("manifest files = %v, want %v", got, want)
 	}
 }
@@ -1073,7 +1073,7 @@ func TestSync_ATaggedSkillReachesOnlyProfilesThatAcceptItsTag(t *testing.T) {
 			t.Errorf("%s exists in %s = %v, want %v", c.rel, c.profile, got, c.want)
 		}
 	}
-	if got, want := manifestPaths(t, env, "claude-personal"), []string{"skills/common/SKILL.md", "skills/journal/SKILL.md"}; !slices.Equal(got, want) {
+	if got, want := manifestPaths(t, env, "claude-personal"), []string{"skills/baton-handoff/SKILL.md", "skills/common/SKILL.md", "skills/journal/SKILL.md"}; !slices.Equal(got, want) {
 		t.Errorf("personal manifest files = %v, want %v", got, want)
 	}
 }
@@ -1110,7 +1110,7 @@ func TestSync_ChangingAProfilesTagsRemovesWhatItNoLongerAcceptsAndOnlyThat(t *te
 	if got := env.ReadFile(filepath.Join(work, "skills/theirs/SKILL.md")); got != "Not Baton's.\n" {
 		t.Errorf("foreign skill = %q, want it untouched", got)
 	}
-	if got, want := manifestPaths(t, env, "claude-work"), []string{"skills/common/SKILL.md"}; !slices.Equal(got, want) {
+	if got, want := manifestPaths(t, env, "claude-work"), []string{"skills/baton-handoff/SKILL.md", "skills/common/SKILL.md"}; !slices.Equal(got, want) {
 		t.Errorf("manifest files = %v, want %v", got, want)
 	}
 

@@ -102,6 +102,13 @@ func (b *Bus) Adopt(ctx context.Context, project projectname.Name, workingCopy s
 	return t, nil
 }
 
+// Current returns the Task that is current in the Working copy now: the one of
+// the latest line of the journal for it, whatever that line's date. ok is false
+// when there is none. Unlike Adopt it never makes one.
+func (b *Bus) Current(ctx context.Context, project projectname.Name, workingCopy string) (t Task, ok bool, err error) {
+	return b.currentAt(ctx, project, workingCopy, time.Date(9999, 12, 31, 0, 0, 0, 0, time.UTC))
+}
+
 // currentAt finds the Task current in the Working copy at time at: the last
 // line of the journal for it that is not later than at. A line that was written
 // late but dated early (see Adopt) counts at its date.
