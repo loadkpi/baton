@@ -22,16 +22,17 @@ const codexHooksFile = "hooks.json"
 // hookCommand is the command line of Baton's status hook: the binary as the
 // Agent sees it, the Agent, the Profile and the Runtime it runs in.
 //
-// In a sandbox the line is guarded: an ai-sandbox that was started without
-// Baton does not have the binary, and its hooks must then do nothing and
-// succeed (ADR 0001). `exec` leaves no shell between the Agent and `baton
+// In a container the line is guarded: an ai-sandbox that was started without
+// Baton does not have the binary, nor does a Compose service whose override
+// file does not mount it yet, and the hooks must then do nothing and succeed
+// (ADR 0001). `exec` leaves no shell between the Agent and `baton
 // hook`. Claude Code runs a hook command with `sh -c`; the Codex documentation
 // does not say whether Codex uses a shell (DESIGN.md, ticket 09), so Codex gets
 // the shell explicitly. Host hooks are not guarded: `baton sync` warns when
 // the host binary is missing.
 func hookCommand(binary string, a agent.Agent, profile string, rt runtime.Runtime) string {
 	call := shellWord(binary) + " hook " + a.String() + " --profile " + profile + " --runtime " + rt.String()
-	if rt != runtime.Sandbox {
+	if rt == runtime.Host {
 		return call
 	}
 	guarded := "[ -x " + shellWord(binary) + " ] || exit 0; exec " + call

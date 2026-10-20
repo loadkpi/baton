@@ -26,14 +26,9 @@ import (
 // ticket 08 fixed. ai-sandbox does not know them: the print-args wrapper in
 // Start adds them.
 const (
-	// ContainerBinDir is where ~/.baton/bin is mounted, read-only.
-	ContainerBinDir = "/baton/bin"
-	// ContainerBinary is the Baton executable in it, the path the hooks of
-	// every Profile in a sandbox call.
-	ContainerBinary = ContainerBinDir + "/baton"
-	// ContainerProject is where the Project's Baton directory is mounted,
-	// read-write: the only part of ~/.baton the container sees.
-	ContainerProject = "/baton/project"
+	ContainerBinDir  = runtimebus.ContainerBinDir
+	ContainerBinary  = runtimebus.ContainerBinary
+	ContainerProject = runtimebus.ContainerProject
 )
 
 // Projects lists the registered Projects.
@@ -112,10 +107,11 @@ func (r *Runtime) Targets(ctx context.Context, cfg configbus.Config) ([]syncbus.
 			})
 		}
 	}
-	// A table in the config that names no Project with a sandbox is most likely
-	// a typo, and its tags would silently count for nothing.
+	// A table in the config that names no Project with a sandbox (and is not a
+	// Compose Project's) is most likely a typo, and its tags would silently
+	// count for nothing.
 	for _, ps := range cfg.Projects {
-		if !sandboxed[ps.Name] {
+		if !sandboxed[ps.Name] && ps.Compose == nil {
 			warnings = append(warnings, fmt.Sprintf("config: [projects.%s] does not name a registered Project with a sandbox; its tags are not used", ps.Name))
 		}
 	}

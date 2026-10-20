@@ -50,6 +50,8 @@ type profilePlan struct {
 	// when it had none before.
 	hooks      bool
 	hooksFirst bool
+	// isolated is Target.Isolated.
+	isolated bool
 }
 
 // sharedChange is the change to the Baton block of one shared file.

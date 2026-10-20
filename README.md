@@ -15,8 +15,8 @@ Work in progress: v1 is built ticket by ticket ([.scratch/baton-v1/issues](.scra
 
 | Command | What works | Checked for real |
 | --- | --- | --- |
-| `baton sync` | Skills, instructions (`CLAUDE.md` block / Codex `AGENTS.md` fragment), MCP servers with secrets from `secrets.env`, and status hooks, filtered by tags, into host Claude Profiles and into both Profiles of every `ai-sandbox` Project (`<project>.claude`, `<project>.codex`). Owns only what it wrote (manifest); asks with a diff and backs up before changing anything else; never writes git-tracked files or secrets into files others can read. | Synced content read by Claude Code 2.1.296 and Codex 0.162.1 inside a real `ai-sandbox` container. |
-| `baton hook` | Appends each Agent Event to a per-Session file (`~/.baton/sessions/`, or the Project's directory for a sandbox). Inside a container without Baton it does nothing. | Fired by a real Claude Code in a container. |
+| `baton sync` | Skills, instructions (`CLAUDE.md` block / Codex `AGENTS.md` fragment), MCP servers with secrets from `secrets.env`, and status hooks, filtered by tags, into host Claude Profiles, into both Profiles of every `ai-sandbox` Project (`<project>.claude`, `<project>.codex`) and into the Claude Profiles inside a Project's Docker Compose service (running or stopped, through `docker`; a service that cannot be reached fails only its own Profiles). Owns only what it wrote (manifest); asks with a diff and backs up before changing anything else; never writes git-tracked files or secrets into files others can read. | Synced content read by Claude Code 2.1.296 and Codex 0.162.1 inside a real `ai-sandbox` container. Compose: the way into a running and a stopped service's volume was tried on real Docker; Baton's own scripts only against a fake `docker`. |
+| `baton hook` | Appends each Agent Event to a per-Session file (`~/.baton/sessions/`, or the Project's directory for a sandbox). Inside a container without Baton (sandbox or Compose) it does nothing. | Fired by a real Claude Code in a container. |
 | `baton ls` | Every Session with Project, Task, Agent, Profile, Runtime and status (`running`, `waiting_approval`, `waiting_input`, `ended`, `lost`); Sessions started by hand included; a Codex Session that reported nothing is shown with a hint to run `/hooks`. | `lost` on a real container: container gone, and Agent killed in a running container. |
 | `baton new` | Opens a Guake tab titled `<project>/<task>:<agent>` with Claude on the host (chosen Profile, API keys removed) or Claude/Codex in the Project's `ai-sandbox` (via its `run.sh`, two Baton mounts, Codex fragments merged). One active Session per Working copy. | The `docker run` it builds, on real Docker (mounts, no key leak, hooks). Not yet in a live Guake. |
 | `baton task name/status` | Name an unnamed Task, mark it `open`, `done` or `dropped`. | — |
@@ -25,7 +25,7 @@ Work in progress: v1 is built ticket by ticket ([.scratch/baton-v1/issues](.scra
 | `baton handoff` | `baton handoff <project>/<task> --to <agent>[@<profile>]` waits (saying so) until the Task's Session ends or is lost, writes a Handoff (git state, last 10 commands, Event file link, the saved narrative if any) to `~/.baton/projects/<project>/handoffs/` and opens a Session of the other Agent or Profile whose first message points to it (and asks it to write the narrative when there is none). | Not yet: neither Agent's TUI was started with the prompt, and exit codes are `?` for Codex and inferred for Claude (see DESIGN.md, D5). |
 | `baton handoff save`, `/baton-handoff` | `baton sync` installs the built-in `/baton-handoff` skill into every Profile (host and sandbox, Claude and Codex, any tags; `baton-*` is reserved). It has the Agent write the narrative and pipe it to `baton handoff save`, which finds the Task from the current directory, on the host and in a sandbox, and keeps it as a draft, or fills the latest Handoff that has none. Before or after `baton handoff` gives the same Handoff. | Not yet: neither Agent was run with the skill, so that it triggers, and that the receiving Agent follows the first message, are unchecked. |
 
-Not built yet: the `compose` Runtime (an Agent inside a project's Docker Compose dev container). Not recorded yet: real hook payloads of a full interactive Session (the test fixtures come from the vendors' documentation).
+Not built yet: `baton new` and `baton ls` in a Docker Compose dev container, and lost and Handoff there (only `baton sync` and the hook exist for `compose`). Not recorded yet: real hook payloads of a full interactive Session (the test fixtures come from the vendors' documentation).
 
 ## Build and test
 
@@ -60,6 +60,27 @@ The Profiles inside a Project's sandbox are not listed: they come from the regis
 [projects.my-app]                        # the Project's name, as `baton ls` shows it
 tags = ["work"]                          # tags accepted by both Agents in this Project's sandbox
 ```
+
+A Project's Docker Compose dev container is configured per Project, with its Claude Profiles (Codex is not supported there yet); `dir` is a path inside the container, `~` is the container user's HOME. Such a Project's default Runtime is `compose`, which `baton new` cannot start yet:
+
+```toml
+[projects.my-app.compose]
+files   = ["docker-compose.yml"]         # absolute, ~/..., or relative to the Project's root
+service = "app"
+
+[projects.my-app.compose.profiles.claude]   # the Profile is called "my-app.claude"
+agent = "claude"
+dir   = "~/.claude"                      # inside the container; may be a link into a volume
+tags  = ["work"]
+
+[profiles.shared-claude]                 # a volume shared by several Compose setups: configure it once
+runtime = "compose"
+project = "my-app"                       # the Project whose service hosts it
+agent   = "claude"
+dir     = "/state/.claude"
+```
+
+The image needs only `sh` and `tar` (and the usual `mktemp`, `readlink`, `mv`). Baton never edits the Compose files and never starts or recreates the service.
 
 Telegram notifications while you are away (`baton away` / `baton back`) need a table in the same file and the bot token in `secrets.env`:
 

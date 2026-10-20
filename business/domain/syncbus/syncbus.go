@@ -210,9 +210,20 @@ type ProfileResult struct {
 	HooksFirst bool
 }
 
+// Failure is a Profile that sync could not render into, while it went on with
+// the others.
+type Failure struct {
+	Name profilename.Name
+	Err  error
+}
+
 // Result is what one sync run did.
 type Result struct {
 	Profiles []ProfileResult
+	// Failures are the isolated Profiles (Target.Isolated) that could not be
+	// reached or written; the other Profiles were synced. The caller reports
+	// them and fails.
+	Failures []Failure
 	// Warnings are things the user should know that did not stop the sync.
 	Warnings []string
 }
@@ -221,8 +232,13 @@ type Result struct {
 // checks everything, plans all Profiles, refuses to touch tracked files and
 // asks every question; it writes only when no Profile has a problem and every
 // question was answered yes.
+//
+// A Target marked Isolated (a Profile in a container) that fails at any of
+// those steps is left out and listed in Result.Failures; the others go on.
 func (b *Bus) Sync(ctx context.Context, cfg configbus.Config, targets []Target) (Result, error) {
+	var res Result
 	seen := make(map[string]bool, len(targets))
+	checked := make([]Target, 0, len(targets))
 	for _, t := range targets {
 		name := t.Profile.Name.String()
 		if seen[name] {
@@ -230,9 +246,15 @@ func (b *Bus) Sync(ctx context.Context, cfg configbus.Config, targets []Target) 
 		}
 		seen[name] = true
 		if err := t.Files.Check(ctx); err != nil {
+			if t.Isolated {
+				res.Failures = append(res.Failures, Failure{Name: t.Profile.Name, Err: err})
+				continue
+			}
 			return Result{}, fmt.Errorf("profile %s: %w", t.Profile.Name, err)
 		}
+		checked = append(checked, t)
 	}
+	targets = checked
 
 	source, err := b.storer.QuerySource(ctx, cfg.Source)
 	if err != nil {
@@ -247,7 +269,6 @@ func (b *Bus) Sync(ctx context.Context, cfg configbus.Config, targets []Target) 
 		return Result{}, err
 	}
 
-	var res Result
 	for _, name := range source.Skipped {
 		res.Warnings = append(res.Warnings, fmt.Sprintf("skipped skills/%s: it has no SKILL.md", name))
 	}
@@ -256,8 +277,13 @@ func (b *Bus) Sync(ctx context.Context, cfg configbus.Config, targets []Target) 
 	for _, t := range targets {
 		plan, err := b.plan(ctx, t, source, secrets, &res)
 		if err != nil {
+			if t.Isolated {
+				res.Failures = append(res.Failures, Failure{Name: t.Profile.Name, Err: err})
+				continue
+			}
 			return Result{}, fmt.Errorf("profile %s: %w", t.Profile.Name, err)
 		}
+		plan.isolated = t.Isolated
 		plans = append(plans, plan)
 	}
 
@@ -276,6 +302,10 @@ func (b *Bus) Sync(ctx context.Context, cfg configbus.Config, targets []Target) 
 	for _, plan := range plans {
 		pr, err := b.apply(ctx, plan, stamp)
 		if err != nil {
+			if plan.isolated {
+				res.Failures = append(res.Failures, Failure{Name: plan.profile.Name, Err: err})
+				continue
+			}
 			return Result{}, fmt.Errorf("profile %s: %w", plan.profile.Name, err)
 		}
 		pr.Agent = plan.profile.Agent

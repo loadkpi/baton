@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io/fs"
+	"strings"
 
 	"github.com/loadkpi/baton/business/domain/configbus"
 	"github.com/loadkpi/baton/business/types/agent"
@@ -63,6 +64,23 @@ type Target struct {
 	// the path on the host, or the path where it is mounted in a container.
 	HookBinary string
 	Files      ProfileFiles
+	// Isolated says that a failure in this Profile (a container that cannot be
+	// reached, a write that fails) is reported without stopping sync for the
+	// other Profiles. The host's own Profiles are not: a mistake in the
+	// config stops the whole run.
+	Isolated bool
+}
+
+// ContentTop is the directory of rel that is never removed with the files
+// below it: the first path element ("skills", "config.d"), or
+// ../.agents/skills for the skills of Codex, which sit next to the Profile
+// directory.
+func ContentTop(rel string) string {
+	parts := strings.Split(rel, "/")
+	if parts[0] == ".." && len(parts) > 3 {
+		return strings.Join(parts[:3], "/")
+	}
+	return parts[0]
 }
 
 // layout is where an Agent keeps what sync writes, and in which form.

@@ -10,6 +10,7 @@ import (
 	"github.com/loadkpi/baton/business/types/agent"
 	"github.com/loadkpi/baton/business/types/profilename"
 	"github.com/loadkpi/baton/business/types/projectname"
+	"github.com/loadkpi/baton/business/types/runtime"
 	"github.com/loadkpi/baton/business/types/tag"
 )
 
@@ -57,6 +58,45 @@ type ProjectSettings struct {
 	// Tags are the tags the Profiles inside the Project's sandbox accept. None
 	// means they receive only untagged items.
 	Tags []tag.Tag
+	// Compose is the Project's Docker Compose service that runs Agents; nil
+	// when the Project has none.
+	Compose *ComposeSettings
+}
+
+// ComposeSettings say where a Project's Agents run in its own Docker Compose
+// setup and which Profiles live in that container (DESIGN.md, ticket 16).
+type ComposeSettings struct {
+	// Files are the Compose files, as written in the config: absolute, "~/..."
+	// or relative to the Project's root.
+	Files []string
+	// Service is the name of the service in them.
+	Service string
+	// Profiles are the Profiles inside the container, in the order of their
+	// names: the Project's own and those of a volume it hosts for others. A
+	// Profile's Dir is a path in the container: absolute, or "~" / "~/..." for
+	// the container user's HOME, which only the container knows.
+	Profiles []Profile
+}
+
+// ComposeOf returns the Compose settings of a Project, or nil.
+func (c Config) ComposeOf(project projectname.Name) *ComposeSettings {
+	for _, p := range c.Projects {
+		if p.Name == project {
+			return p.Compose
+		}
+	}
+	return nil
+}
+
+// DefaultRuntime is the Runtime a Project's Agents run in unless told
+// otherwise: compose for a Project that has a Compose service in the config,
+// else the one found when the Project was registered (sandbox if it has an
+// ai-sandbox, host if not).
+func (c Config) DefaultRuntime(project projectname.Name, found runtime.Runtime) runtime.Runtime {
+	if c.ComposeOf(project) != nil {
+		return runtime.Compose
+	}
+	return found
 }
 
 // SandboxTags returns the tags the sandbox Profiles of a Project accept.

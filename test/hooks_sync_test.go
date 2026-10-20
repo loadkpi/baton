@@ -27,6 +27,12 @@ func hookCommand(env *batontest.Env, profile string) string {
 // handlers, in file order.
 func hookCommands(t *testing.T, env *batontest.Env, path string) map[string][]string {
 	t.Helper()
+	return hookCommandsOf(t, env.ReadFile(path), path)
+}
+
+// hookCommandsOf is hookCommands for the text of a hooks file, named for errors.
+func hookCommandsOf(t *testing.T, text, name string) map[string][]string {
+	t.Helper()
 	var doc struct {
 		Hooks map[string][]struct {
 			Matcher string `json:"matcher"`
@@ -36,8 +42,8 @@ func hookCommands(t *testing.T, env *batontest.Env, path string) map[string][]st
 			} `json:"hooks"`
 		} `json:"hooks"`
 	}
-	if err := json.Unmarshal([]byte(env.ReadFile(path)), &doc); err != nil {
-		t.Fatalf("%s is not valid JSON: %v\n%s", path, err, env.ReadFile(path))
+	if err := json.Unmarshal([]byte(text), &doc); err != nil {
+		t.Fatalf("%s is not valid JSON: %v\n%s", name, err, text)
 	}
 	out := make(map[string][]string)
 	for event, groups := range doc.Hooks {

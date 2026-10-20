@@ -16,7 +16,8 @@ import (
 // BuildBinary compiles ./app/baton of the module that contains the working
 // directory into a fresh temporary directory (CGO disabled, like the release
 // binary). It returns the binary path and a cleanup function. Call it once per
-// test run, from TestMain.
+// test run, from TestMain. The fake docker of the Compose tests
+// (internal/batontest/dockerfake) is built next to it.
 func BuildBinary() (path string, cleanup func(), err error) {
 	root, err := moduleRoot()
 	if err != nil {
@@ -29,12 +30,14 @@ func BuildBinary() (path string, cleanup func(), err error) {
 	cleanup = func() { _ = os.RemoveAll(dir) }
 
 	path = filepath.Join(dir, "baton")
-	cmd := exec.Command("go", "build", "-o", path, "./app/baton")
-	cmd.Dir = root
-	cmd.Env = append(os.Environ(), "CGO_ENABLED=0")
-	if out, err := cmd.CombinedOutput(); err != nil {
-		cleanup()
-		return "", nil, fmt.Errorf("go build ./app/baton: %w\n%s", err, out)
+	for _, b := range []struct{ out, pkg string }{{path, "./app/baton"}, {fakeDockerPath(path), "./internal/batontest/dockerfake"}} {
+		cmd := exec.Command("go", "build", "-o", b.out, b.pkg)
+		cmd.Dir = root
+		cmd.Env = append(os.Environ(), "CGO_ENABLED=0")
+		if out, err := cmd.CombinedOutput(); err != nil {
+			cleanup()
+			return "", nil, fmt.Errorf("go build %s: %w\n%s", b.pkg, err, out)
+		}
 	}
 	return path, cleanup, nil
 }
@@ -55,4 +58,10 @@ func moduleRoot() (string, error) {
 		}
 		dir = parent
 	}
+}
+
+// fakeDockerPath is where BuildBinary puts the fake docker, given the baton
+// binary.
+func fakeDockerPath(bin string) string {
+	return filepath.Join(filepath.Dir(bin), "dockerfake")
 }

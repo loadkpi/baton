@@ -8,7 +8,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/loadkpi/baton/business/domain/runtimebus/stores/runtimesandbox"
+	"github.com/loadkpi/baton/business/domain/runtimebus"
 	"github.com/loadkpi/baton/business/domain/sessionbus"
 	"github.com/loadkpi/baton/business/domain/sessionbus/stores/sessionfile"
 	"github.com/loadkpi/baton/business/domain/sessionbus/stores/sessionproc"
@@ -47,11 +47,12 @@ func runHook(ctx context.Context, c console, home string, args []string) int {
 	}
 
 	storer := sessionfile.New(filepath.Join(home, ".baton"))
-	if *runtimeName == runtime.Sandbox.String() {
+	if *runtimeName == runtime.Sandbox.String() || *runtimeName == runtime.Compose.String() {
 		// In a container the Project's Baton directory is mounted. Without
-		// the mount this is an ai-sandbox started without Baton (ADR 0001):
-		// there is nobody to tell, and the Agent must not notice.
-		projectDir := filepath.Join(os.Getenv(containerRootVar), runtimesandbox.ContainerProject)
+		// the mount this is an ai-sandbox, or a Compose service whose override
+		// file does not mount it yet (ADR 0001, DESIGN.md D3): there is nobody
+		// to tell, and the Agent must not notice.
+		projectDir := filepath.Join(os.Getenv(containerRootVar), runtimebus.ContainerProject)
 		if info, err := os.Stat(projectDir); err != nil || !info.IsDir() {
 			return exitOK
 		}

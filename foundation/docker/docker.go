@@ -5,7 +5,9 @@ package docker
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
+	"io"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -24,25 +26,59 @@ type Client struct {
 	Binary string
 }
 
-func (c Client) run(ctx context.Context, args ...string) (string, error) {
-	bin := c.Binary
-	if bin == "" {
-		bin = "docker"
+func (c Client) binary() string {
+	if c.Binary == "" {
+		return "docker"
 	}
-	ctx, cancel := context.WithTimeout(ctx, timeout)
+	return c.Binary
+}
+
+func (c Client) run(ctx context.Context, args ...string) (string, error) {
+	out, err := c.exec(ctx, timeout, nil, args...)
+	return string(out), err
+}
+
+// exec runs docker with args and the given standard input (none when nil) and
+// returns standard output. A failure is an *Error, which carries the exit code
+// and what docker wrote to standard error.
+func (c Client) exec(ctx context.Context, limit time.Duration, stdin io.Reader, args ...string) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(ctx, limit)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, bin, args...)
+	cmd := exec.CommandContext(ctx, c.binary(), args...)
+	cmd.Stdin = stdin
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	if err := cmd.Run(); err != nil {
-		if msg := strings.TrimSpace(stderr.String()); msg != "" {
-			return "", fmt.Errorf("docker %s: %w: %s", args[0], err, msg)
+		e := &Error{Command: args[0], Stderr: strings.TrimSpace(stderr.String()), Err: err}
+		var exit *exec.ExitError
+		if errors.As(err, &exit) {
+			e.Code = exit.ExitCode()
 		}
-		return "", fmt.Errorf("docker %s: %w", args[0], err)
+		return nil, e
 	}
-	return stdout.String(), nil
+	return stdout.Bytes(), nil
 }
+
+// Error is a docker command that failed.
+type Error struct {
+	// Command is the docker subcommand ("compose", "cp", ...).
+	Command string
+	// Code is its exit code, or 0 when it did not run to an exit.
+	Code int
+	// Stderr is what it wrote to standard error, trimmed.
+	Stderr string
+	Err    error
+}
+
+func (e *Error) Error() string {
+	if e.Stderr != "" {
+		return fmt.Sprintf("docker %s: %v: %s", e.Command, e.Err, e.Stderr)
+	}
+	return fmt.Sprintf("docker %s: %v", e.Command, e.Err)
+}
+
+func (e *Error) Unwrap() error { return e.Err }
 
 // Running returns the full ids of the containers that run now, with one call.
 func (c Client) Running(ctx context.Context) ([]string, error) {

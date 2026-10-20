@@ -67,6 +67,8 @@ func runNew(ctx context.Context, c console, home string, args []string) int {
 	if err != nil {
 		return c.errorf("%v", err)
 	}
+	// A Project with a Compose service in the config runs there by default.
+	place.Project.Runtime = cfg.DefaultRuntime(place.Project.Name, place.Project.Runtime)
 
 	// The Profile of a host Session is chosen from the config; the Profiles
 	// inside a sandbox are the Project's own (<project>.<agent>) and are not.

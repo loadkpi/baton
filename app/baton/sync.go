@@ -10,6 +10,7 @@ import (
 	"github.com/loadkpi/baton/business/domain/projectbus"
 	"github.com/loadkpi/baton/business/domain/projectbus/stores/projectfile"
 	"github.com/loadkpi/baton/business/domain/runtimebus"
+	"github.com/loadkpi/baton/business/domain/runtimebus/stores/runtimecompose"
 	"github.com/loadkpi/baton/business/domain/runtimebus/stores/runtimehost"
 	"github.com/loadkpi/baton/business/domain/runtimebus/stores/runtimesandbox"
 	"github.com/loadkpi/baton/business/domain/syncbus"
@@ -27,7 +28,9 @@ func runSync(ctx context.Context, c console, home string) int {
 
 	var targets []syncbus.Target
 	var warnings []string
-	for _, rt := range []runtimebus.Runtime{runtimehost.New(), runtimesandbox.New(projectbus.New(projectfile.New(filepath.Join(home, ".baton"))), filepath.Join(home, ".baton"))} {
+	batonDir := filepath.Join(home, ".baton")
+	projects := projectbus.New(projectfile.New(batonDir))
+	for _, rt := range []runtimebus.Runtime{runtimehost.New(), runtimesandbox.New(projects, batonDir), runtimecompose.New(projects)} {
 		t, w, err := rt.Targets(ctx, cfg)
 		if err != nil {
 			return c.errorf("%s Runtime: %v", rt.Name(), err)
@@ -47,6 +50,14 @@ func runSync(ctx context.Context, c console, home string) int {
 	}
 	for _, line := range toAppSyncLines(res) {
 		c.println(line)
+	}
+	// The Profiles that could be reached are synced; the others are why the
+	// command fails.
+	for _, f := range res.Failures {
+		_, _ = fmt.Fprintf(c.stderr, "baton: profile %s: not synced: %v\n", f.Name, f.Err)
+	}
+	if len(res.Failures) > 0 {
+		return exitError
 	}
 	return exitOK
 }

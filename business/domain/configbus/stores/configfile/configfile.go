@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/url"
 	"os"
+	"path"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -56,13 +57,34 @@ type fileTelegram struct {
 }
 
 type fileProject struct {
-	Tags []string `toml:"tags"`
+	Tags    []string     `toml:"tags"`
+	Compose *fileCompose `toml:"compose"`
 }
 
-type fileProfile struct {
+// fileCompose is [projects.<name>.compose]: the service and its Profiles.
+type fileCompose struct {
+	Files    []string                      `toml:"files"`
+	Service  string                        `toml:"service"`
+	Profiles map[string]fileComposeProfile `toml:"profiles"`
+}
+
+// fileComposeProfile is a Profile inside the container of the service.
+type fileComposeProfile struct {
 	Agent string   `toml:"agent"`
 	Dir   string   `toml:"dir"`
 	Tags  []string `toml:"tags"`
+}
+
+// fileProfile is a [profiles.<name>] table: a Profile of the host, or (with
+// runtime = "compose" and project) a Profile in a volume that the Compose
+// service of that Project hosts, configured here once for everybody who
+// shares the volume.
+type fileProfile struct {
+	Agent   string   `toml:"agent"`
+	Dir     string   `toml:"dir"`
+	Tags    []string `toml:"tags"`
+	Runtime string   `toml:"runtime"`
+	Project string   `toml:"project"`
 }
 
 // Query reads and validates the configuration file.
@@ -107,9 +129,6 @@ func toBusConfig(fc fileConfig, home string) (configbus.Config, error) {
 	if !filepath.IsAbs(source) {
 		return configbus.Config{}, fmt.Errorf("source %q must be an absolute path (or start with ~)", fc.Source)
 	}
-	if len(fc.Profiles) == 0 {
-		return configbus.Config{}, errors.New("no profiles configured; add a [profiles.<name>] table")
-	}
 	cfg := configbus.Config{Home: home, Source: source}
 
 	names := make([]string, 0, len(fc.Profiles))
@@ -118,12 +137,31 @@ func toBusConfig(fc fileConfig, home string) (configbus.Config, error) {
 	}
 	sort.Strings(names)
 
+	shared := make(map[string][]configbus.Profile) // volume Profiles by the Project that hosts them
 	for _, name := range names {
-		p, err := toBusProfile(name, fc.Profiles[name], home)
-		if err != nil {
-			return configbus.Config{}, err
+		fp := fc.Profiles[name]
+		switch fp.Runtime {
+		case "", "host":
+			if fp.Project != "" {
+				return configbus.Config{}, fmt.Errorf("profile %s: project applies only to runtime = \"compose\"", name)
+			}
+			p, err := toBusProfile(name, fp, home)
+			if err != nil {
+				return configbus.Config{}, err
+			}
+			cfg.Profiles = append(cfg.Profiles, p)
+		case "compose":
+			p, err := toBusComposeProfile(name, fp.Agent, fp.Dir, fp.Tags)
+			if err != nil {
+				return configbus.Config{}, err
+			}
+			if fp.Project == "" {
+				return configbus.Config{}, fmt.Errorf("profile %s: project is required (the Project whose Compose service hosts the volume)", name)
+			}
+			shared[fp.Project] = append(shared[fp.Project], p)
+		default:
+			return configbus.Config{}, fmt.Errorf("profile %s: runtime %q must be \"host\" or \"compose\" (sandbox Profiles are not listed in the config)", name, fp.Runtime)
 		}
-		cfg.Profiles = append(cfg.Profiles, p)
 	}
 	projects := make([]string, 0, len(fc.Projects))
 	for name := range fc.Projects {
@@ -131,11 +169,18 @@ func toBusConfig(fc fileConfig, home string) (configbus.Config, error) {
 	}
 	sort.Strings(projects)
 	for _, name := range projects {
-		p, err := toBusProjectSettings(name, fc.Projects[name])
+		p, err := toBusProjectSettings(name, fc.Projects[name], shared[name])
 		if err != nil {
 			return configbus.Config{}, err
 		}
+		delete(shared, name)
 		cfg.Projects = append(cfg.Projects, p)
+	}
+	for project, ps := range shared {
+		return configbus.Config{}, fmt.Errorf("profile %s: project %q has no [projects.%s.compose] table", ps[0].Name, project, project)
+	}
+	if err := checkProfiles(cfg); err != nil {
+		return configbus.Config{}, err
 	}
 	if fc.Telegram != nil {
 		t, err := toBusTelegram(*fc.Telegram)
@@ -149,13 +194,15 @@ func toBusConfig(fc fileConfig, home string) (configbus.Config, error) {
 		if err != nil {
 			return configbus.Config{}, fmt.Errorf("default_profile: %w", err)
 		}
-		if _, ok := fc.Profiles[fc.DefaultProfile]; !ok {
+		if _, ok := fc.Profiles[fc.DefaultProfile]; !ok || !isHost(fc.Profiles[fc.DefaultProfile]) {
 			return configbus.Config{}, fmt.Errorf("default_profile %q is not a configured profile", fc.DefaultProfile)
 		}
 		cfg.DefaultProfile = name
 	}
 	return cfg, nil
 }
+
+func isHost(fp fileProfile) bool { return fp.Runtime == "" || fp.Runtime == "host" }
 
 // defaultAPIURL is the Bot API of Telegram.
 const defaultAPIURL = "https://api.telegram.org"
@@ -212,7 +259,7 @@ func isLoopback(host string) bool {
 	return ip != nil && ip.IsLoopback()
 }
 
-func toBusProjectSettings(name string, fp fileProject) (configbus.ProjectSettings, error) {
+func toBusProjectSettings(name string, fp fileProject, hosted []configbus.Profile) (configbus.ProjectSettings, error) {
 	pn, err := projectname.Parse(name)
 	if err != nil {
 		return configbus.ProjectSettings{}, fmt.Errorf("projects.%s: %w", name, err)
@@ -221,7 +268,111 @@ func toBusProjectSettings(name string, fp fileProject) (configbus.ProjectSetting
 	if err != nil {
 		return configbus.ProjectSettings{}, fmt.Errorf("projects.%s: tags: %w", name, err)
 	}
-	return configbus.ProjectSettings{Name: pn, Tags: tags}, nil
+	ps := configbus.ProjectSettings{Name: pn, Tags: tags}
+	if fp.Compose == nil {
+		return ps, nil
+	}
+	if ps.Compose, err = toBusCompose(name, *fp.Compose, hosted); err != nil {
+		return configbus.ProjectSettings{}, fmt.Errorf("projects.%s.compose: %w", name, err)
+	}
+	return ps, nil
+}
+
+// toBusCompose converts a Project's Compose table. hosted are the Profiles of
+// volumes the service hosts for several Compose setups, from [profiles.*].
+func toBusCompose(project string, fc fileCompose, hosted []configbus.Profile) (*configbus.ComposeSettings, error) {
+	if len(fc.Files) == 0 {
+		return nil, errors.New("files is required (the Compose files, as for docker compose -f)")
+	}
+	for _, f := range fc.Files {
+		if f == "" {
+			return nil, errors.New("files: a file name is empty")
+		}
+	}
+	if fc.Service == "" {
+		return nil, errors.New("service is required")
+	}
+	c := &configbus.ComposeSettings{Files: fc.Files, Service: fc.Service, Profiles: hosted}
+	for key, fp := range fc.Profiles {
+		name := project + "." + key
+		p, err := toBusComposeProfile(name, fp.Agent, fp.Dir, fp.Tags)
+		if err != nil {
+			return nil, err
+		}
+		c.Profiles = append(c.Profiles, p)
+	}
+	if len(c.Profiles) == 0 {
+		return nil, errors.New("no Profiles: add [projects." + project + ".compose.profiles.<name>], or a [profiles.<name>] with runtime = \"compose\" and project = \"" + project + "\"")
+	}
+	sort.Slice(c.Profiles, func(i, j int) bool { return c.Profiles[i].Name.String() < c.Profiles[j].Name.String() })
+	return c, nil
+}
+
+// toBusComposeProfile converts a Profile inside a container. Its Dir stays a
+// path of the container: "~" is the HOME of the container's user, which the
+// host cannot know.
+func toBusComposeProfile(name, agentName, dir string, tags []string) (configbus.Profile, error) {
+	pn, err := profilename.Parse(name)
+	if err != nil {
+		return configbus.Profile{}, err
+	}
+	a, err := agent.Parse(agentName)
+	if err != nil {
+		return configbus.Profile{}, fmt.Errorf("profile %s: %w", name, err)
+	}
+	if a != agent.Claude {
+		return configbus.Profile{}, fmt.Errorf("profile %s: agent %q is not supported in a compose container yet (its MCP servers need a config.toml editor)", name, a)
+	}
+	switch {
+	case dir == "~":
+	case strings.HasPrefix(dir, "~/"):
+		dir = "~/" + strings.TrimPrefix(path.Clean("/"+dir[2:]), "/")
+		dir = strings.TrimSuffix(dir, "/")
+		if dir == "~" {
+			break
+		}
+	case path.IsAbs(dir):
+		dir = path.Clean(dir)
+	default:
+		return configbus.Profile{}, fmt.Errorf("profile %s: dir %q must be an absolute path in the container (or start with ~, the HOME of its user)", name, dir)
+	}
+	ts, err := tag.ParseAll(tags)
+	if err != nil {
+		return configbus.Profile{}, fmt.Errorf("profile %s: tags: %w", name, err)
+	}
+	return configbus.Profile{Name: pn, Agent: a, Dir: dir, Tags: ts}, nil
+}
+
+// checkProfiles requires at least one Profile and refuses a name used twice,
+// because a Profile name names its manifest.
+func checkProfiles(cfg configbus.Config) error {
+	seen := make(map[string]bool)
+	add := func(p configbus.Profile) error {
+		if seen[p.Name.String()] {
+			return fmt.Errorf("profile %s is configured twice", p.Name)
+		}
+		seen[p.Name.String()] = true
+		return nil
+	}
+	for _, p := range cfg.Profiles {
+		if err := add(p); err != nil {
+			return err
+		}
+	}
+	for _, ps := range cfg.Projects {
+		if ps.Compose == nil {
+			continue
+		}
+		for _, p := range ps.Compose.Profiles {
+			if err := add(p); err != nil {
+				return err
+			}
+		}
+	}
+	if len(seen) == 0 {
+		return errors.New("no profiles configured; add a [profiles.<name>] table")
+	}
+	return nil
 }
 
 func toBusProfile(name string, fp fileProfile, home string) (configbus.Profile, error) {

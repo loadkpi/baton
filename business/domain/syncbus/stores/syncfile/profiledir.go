@@ -165,22 +165,13 @@ func (p *ProfileDir) RemoveFile(_ context.Context, rel string) error {
 		return err
 	}
 
-	top := p.Path(topOf(rel))
+	top := p.Path(syncbus.ContentTop(rel))
 	for dir := filepath.Dir(full); dir != top && strings.HasPrefix(dir, top+string(filepath.Separator)); dir = filepath.Dir(dir) {
 		if err := os.Remove(dir); err != nil {
 			break // not empty (or gone): the directory has other content
 		}
 	}
 	return nil
-}
-
-// topOf is the directory of rel that is never removed with the files below it.
-func topOf(rel string) string {
-	parts := strings.Split(rel, "/")
-	if parts[0] == ".." && len(parts) > 3 {
-		return strings.Join(parts[:3], "/")
-	}
-	return parts[0]
 }
 
 // SaveBackup writes entry to <baton dir>/backups/<profile>/<stamp>/<rel>. It

@@ -27,6 +27,9 @@ type Env struct {
 
 	stubDir  string
 	callsDir string
+	// containers are the fake Compose containers of AddContainer.
+	containers     []*Container
+	missingVolumes []string
 }
 
 // New creates an Env around the baton binary built by BuildBinary. It makes

@@ -15,6 +15,19 @@ import (
 	"github.com/loadkpi/baton/business/types/runtime"
 )
 
+// The two Baton mounts every container Runtime expects (DESIGN.md, D3). The
+// containers' own images and Compose files know nothing about them.
+const (
+	// ContainerBinDir is where ~/.baton/bin is mounted, read-only.
+	ContainerBinDir = "/baton/bin"
+	// ContainerBinary is the Baton executable in it, the path the hooks of
+	// every Profile in a container call.
+	ContainerBinary = ContainerBinDir + "/baton"
+	// ContainerProject is where the Project's Baton directory is mounted,
+	// read-write: the only part of ~/.baton the container sees.
+	ContainerProject = "/baton/project"
+)
+
 // ErrNotImplemented is what a Runtime answers for a part of the interface that
 // no ticket has filled in for it yet.
 var ErrNotImplemented = errors.New("not implemented yet")
