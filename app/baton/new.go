@@ -19,13 +19,16 @@ import (
 	"github.com/loadkpi/baton/business/domain/runtimebus"
 	"github.com/loadkpi/baton/business/domain/runtimebus/stores/runtimehost"
 	"github.com/loadkpi/baton/business/domain/runtimebus/stores/runtimesandbox"
+	"github.com/loadkpi/baton/business/domain/sessionbus"
+	"github.com/loadkpi/baton/business/domain/sessionbus/stores/sessionfile"
+	"github.com/loadkpi/baton/business/domain/sessionbus/stores/sessionproc"
 	"github.com/loadkpi/baton/business/types/agent"
 	"github.com/loadkpi/baton/business/types/profilename"
 	"github.com/loadkpi/baton/business/types/runtime"
 	"github.com/loadkpi/baton/business/types/taskref"
 )
 
-const newUsage = "usage: baton new <project> [task] --agent <claude> [--profile <name>]"
+const newUsage = "usage: baton new <project> [task] --agent <claude|codex> [--profile <name>]"
 
 // newArgs are the words of `baton new`, as typed.
 type newArgs struct {
@@ -70,6 +73,9 @@ func runNew(ctx context.Context, c console, home string, args []string) int {
 	var profile configbus.Profile
 	switch {
 	case place.Project.Runtime == runtime.Host:
+		if a == agent.Codex {
+			return c.errorf("project %s runs in the %s Runtime; %s runs only in a sandbox (a Project with .ai-sandbox/run.sh)", place.Project.Name, place.Project.Runtime, a)
+		}
 		if profile, err = cfg.SelectProfile(a, chosen); err != nil {
 			return c.errorf("%v", err)
 		}
@@ -79,7 +85,8 @@ func runNew(ctx context.Context, c console, home string, args []string) int {
 
 	req := launchbus.Request{Home: home, Place: place, Task: task, Agent: a, Profile: profile}
 	batonDir := filepath.Join(home, ".baton")
-	if err := launchbus.New(launchguake.New(), newWorkBus(batonDir), startable(batonDir, c.stderr)).Start(ctx, req); err != nil {
+	sessions := sessionbus.New(sessionfile.New(batonDir), sessionproc.New())
+	if err := launchbus.New(launchguake.New(), newWorkBus(batonDir), sessions, startable(batonDir, c.stderr)).Start(ctx, req); err != nil {
 		return c.errorf("%v", err)
 	}
 	return exitOK

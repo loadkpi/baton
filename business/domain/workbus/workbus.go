@@ -45,18 +45,30 @@ type Placed struct {
 	Task  taskbus.Task
 }
 
+// Listing is what `baton ls` shows.
+type Listing struct {
+	// Sessions are the Sessions with Events, the most recently active first.
+	Sessions []Placed
+	// Silent are the Sessions Baton started that have reported no Event yet.
+	Silent []sessionbus.Launch
+}
+
 // List returns every Session, the most recently active first, with its place
-// and Task. A Session's place is that of the directory of its first Event.
-// Reading registers the Projects the Sessions are in, and gives a Session that
-// has no Task an unnamed one.
-func (b *Bus) List(ctx context.Context) ([]Placed, error) {
+// and Task, and the launches that no Event has followed. A Session's place is
+// that of the directory of its first Event. Reading registers the Projects the
+// Sessions are in, and gives a Session that has no Task an unnamed one.
+func (b *Bus) List(ctx context.Context) (Listing, error) {
 	sessions, err := b.sessions.List(ctx)
 	if err != nil {
-		return nil, err
+		return Listing{}, err
+	}
+	silent, err := b.sessions.Silent(ctx, sessions)
+	if err != nil {
+		return Listing{}, err
 	}
 	out, err := b.place(ctx, sessions)
 	if err != nil {
-		return nil, err
+		return Listing{}, err
 	}
 
 	// Sessions are adopted oldest first. A Session that starts later in a
@@ -79,10 +91,10 @@ func (b *Bus) List(ctx context.Context) ([]Placed, error) {
 		}
 		p := &out[i]
 		if p.Task, err = b.tasks.Adopt(ctx, p.Place.Project.Name, p.Place.WorkingCopy, p.Session.Started); err != nil {
-			return nil, err
+			return Listing{}, err
 		}
 	}
-	return out, nil
+	return Listing{Sessions: out, Silent: silent}, nil
 }
 
 // place finds the Working copy of each Session. Each directory is looked at

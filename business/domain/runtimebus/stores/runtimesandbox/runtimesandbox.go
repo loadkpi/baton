@@ -96,7 +96,7 @@ func (r *Runtime) Targets(ctx context.Context, cfg configbus.Config) ([]syncbus.
 			agent agent.Agent
 			dir   string
 		}{{agent.Claude, ".claude"}, {agent.Codex, ".codex"}} {
-			name, err := profilename.Parse(p.Name.String() + "." + a.agent.String())
+			name, err := profilename.Sandbox(p.Name, a.agent)
 			if err != nil {
 				return nil, nil, fmt.Errorf("name the %s Profile of project %s: %w", a.agent, p.Name, err)
 			}

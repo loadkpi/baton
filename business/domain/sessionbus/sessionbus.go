@@ -65,6 +65,12 @@ type Storer interface {
 	// QueryEventsBackward calls yield with the Session's Events, newest first,
 	// until it returns false. Lines that cannot be read are skipped.
 	QueryEventsBackward(ctx context.Context, ref SessionRef, yield func(Event) bool) error
+	// SaveLaunch writes the launch record of its Project and Agent, replacing
+	// the one before it.
+	SaveLaunch(ctx context.Context, l Launch) error
+	// QueryLaunches returns every launch record. A record that cannot be
+	// read is skipped.
+	QueryLaunches(ctx context.Context) ([]Launch, error)
 }
 
 // SessionRef names the Event file of one Session to the storage.

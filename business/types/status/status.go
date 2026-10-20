@@ -37,8 +37,8 @@ var claudeTable = map[string]Status{
 	"SessionEnd":         Ended,
 }
 
-// codexTable is the Codex column of the same table. Sync needs its Events to
-// install the hooks (ticket 08); ticket 10 makes `baton ls` use it.
+// codexTable is the Codex column of the same table. Sync installs its Events
+// as hooks, and `baton ls` derives the status of a Codex Session from them.
 var codexTable = map[string]Status{
 	"UserPromptSubmit":  Running,
 	"PreToolUse":        Running,

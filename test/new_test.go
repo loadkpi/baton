@@ -280,12 +280,12 @@ func TestNew_BadArgumentsAreUsageErrorsAndOpenNoTab(t *testing.T) {
 		args []string
 		want string
 	}{
-		{"no project", []string{"new", "--agent", "claude"}, "baton: new: a project is required (usage: baton new <project> [task] --agent <claude> [--profile <name>])\n"},
-		{"no agent", []string{"new", "my-app"}, "baton: new: --agent is required (usage: baton new <project> [task] --agent <claude> [--profile <name>])\n"},
-		{"too many arguments", []string{"new", "my-app", "a", "b", "--agent", "claude"}, "baton: new: unexpected argument \"b\" (usage: baton new <project> [task] --agent <claude> [--profile <name>])\n"},
-		{"codex is not supported yet", []string{"new", "my-app", "--agent", "codex"}, "baton: new: --agent: unsupported agent \"codex\" (supported: claude)\n"},
+		{"no project", []string{"new", "--agent", "claude"}, "baton: new: a project is required (usage: baton new <project> [task] --agent <claude|codex> [--profile <name>])\n"},
+		{"no agent", []string{"new", "my-app"}, "baton: new: --agent is required (usage: baton new <project> [task] --agent <claude|codex> [--profile <name>])\n"},
+		{"too many arguments", []string{"new", "my-app", "a", "b", "--agent", "claude"}, "baton: new: unexpected argument \"b\" (usage: baton new <project> [task] --agent <claude|codex> [--profile <name>])\n"},
+		{"unknown agent", []string{"new", "my-app", "--agent", "gemini"}, "baton: new: --agent: unsupported agent \"gemini\" (supported: claude, codex)\n"},
 		{"bad task name", []string{"new", "my-app", "Not A Task", "--agent", "claude"}, "baton: new: invalid task name \"Not A Task\": use lowercase letters, digits, '.', '_' and '-', starting with a letter or digit\n"},
-		{"unknown flag", []string{"new", "my-app", "--agent", "claude", "--bogus"}, "baton: new: flag provided but not defined: -bogus (usage: baton new <project> [task] --agent <claude> [--profile <name>])\n"},
+		{"unknown flag", []string{"new", "my-app", "--agent", "claude", "--bogus"}, "baton: new: flag provided but not defined: -bogus (usage: baton new <project> [task] --agent <claude|codex> [--profile <name>])\n"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

@@ -11,8 +11,9 @@ type Agent struct {
 // Claude is Claude Code.
 var Claude = Agent{name: "claude"}
 
-// Codex is the Codex CLI. It runs only in a sandbox, so Parse does not accept
-// it yet (ticket 10 does).
+// Codex is the Codex CLI. It runs only in a sandbox (DESIGN.md, D3); Parse
+// accepts it, and the code that starts an Agent or reads a host Profile refuses
+// it where it cannot run.
 var Codex = Agent{name: "codex"}
 
 // Parse converts a configured name into an Agent.
@@ -20,8 +21,10 @@ func Parse(s string) (Agent, error) {
 	switch s {
 	case Claude.name:
 		return Claude, nil
+	case Codex.name:
+		return Codex, nil
 	default:
-		return Agent{}, fmt.Errorf("unsupported agent %q (supported: %s)", s, Claude.name)
+		return Agent{}, fmt.Errorf("unsupported agent %q (supported: %s, %s)", s, Claude.name, Codex.name)
 	}
 }
 

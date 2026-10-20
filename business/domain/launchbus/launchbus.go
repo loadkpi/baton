@@ -5,12 +5,16 @@ package launchbus
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/loadkpi/baton/business/domain/configbus"
 	"github.com/loadkpi/baton/business/domain/projectbus"
 	"github.com/loadkpi/baton/business/domain/runtimebus"
+	"github.com/loadkpi/baton/business/domain/sessionbus"
 	"github.com/loadkpi/baton/business/domain/workbus"
 	"github.com/loadkpi/baton/business/types/agent"
+	"github.com/loadkpi/baton/business/types/profilename"
+	"github.com/loadkpi/baton/business/types/projectname"
 	"github.com/loadkpi/baton/business/types/runtime"
 	"github.com/loadkpi/baton/business/types/taskref"
 )
@@ -38,14 +42,16 @@ type Request struct {
 type Bus struct {
 	terminal Terminal
 	work     *workbus.Bus
+	sessions *sessionbus.Bus
 	runtimes map[runtime.Runtime]runtimebus.Runtime
 }
 
-// New creates the domain over a Terminal, the domain that decides the Task and
-// the Runtimes that can start an Agent. A Project whose Runtime is not among
-// them (compose, until ticket 17) is refused.
-func New(terminal Terminal, work *workbus.Bus, runtimes map[runtime.Runtime]runtimebus.Runtime) *Bus {
-	return &Bus{terminal: terminal, work: work, runtimes: runtimes}
+// New creates the domain over a Terminal, the domain that decides the Task, the
+// Sessions (where launches are remembered) and the Runtimes that can start an
+// Agent. A Project whose Runtime is not among them (compose, until ticket 17) is
+// refused.
+func New(terminal Terminal, work *workbus.Bus, sessions *sessionbus.Bus, runtimes map[runtime.Runtime]runtimebus.Runtime) *Bus {
+	return &Bus{terminal: terminal, work: work, sessions: sessions, runtimes: runtimes}
 }
 
 // Start makes the Task of the request the current one of the Working copy and
@@ -68,6 +74,7 @@ func (b *Bus) Start(ctx context.Context, r Request) error {
 	if err != nil {
 		return err
 	}
+	began := time.Now()
 	tab, err := rt.Start(ctx, runtimebus.StartRequest{
 		Home:        r.Home,
 		Project:     project.Name,
@@ -81,6 +88,25 @@ func (b *Bus) Start(ctx context.Context, r Request) error {
 	}
 	if err := b.terminal.OpenTab(ctx, tab); err != nil {
 		return fmt.Errorf("open a tab for %s: %w", tab.Title, err)
+	}
+	// Codex runs Baton's hooks only after the user trusted them, so a Codex
+	// that Baton started can stay silent for good. Remembering the launch is
+	// how `baton ls` can tell. Claude needs no such thing: its hooks run once
+	// sync wrote them.
+	if r.Agent == agent.Codex {
+		return b.recordLaunch(ctx, began, project.Name, project.Runtime, task.Label(), tab.Title, r.Agent)
+	}
+	return nil
+}
+
+func (b *Bus) recordLaunch(ctx context.Context, at time.Time, project projectname.Name, rt runtime.Runtime, task, title string, a agent.Agent) error {
+	profile, err := profilename.Sandbox(project, a)
+	if err != nil {
+		return fmt.Errorf("name the %s Profile of project %s: %w", a, project, err)
+	}
+	l := sessionbus.Launch{TS: at, Project: project, Agent: a, Profile: profile, Runtime: rt, Task: task, Title: title}
+	if err := b.sessions.RecordLaunch(ctx, l); err != nil {
+		return fmt.Errorf("the tab %s is open, but remembering the launch failed: %w", title, err)
 	}
 	return nil
 }

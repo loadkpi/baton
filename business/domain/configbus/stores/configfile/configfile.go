@@ -144,6 +144,11 @@ func toBusProfile(name string, fp fileProfile, home string) (configbus.Profile, 
 	if err != nil {
 		return configbus.Profile{}, fmt.Errorf("profile %s: %w", name, err)
 	}
+	if a == agent.Codex {
+		// Codex runs only in a sandbox, whose Profiles come from the
+		// registered Projects, not from the config (DESIGN.md, D3).
+		return configbus.Profile{}, fmt.Errorf("profile %s: agent %q runs only in a sandbox, whose Profiles are not listed in the config", name, a)
+	}
 	if fp.Dir == "" {
 		return configbus.Profile{}, fmt.Errorf("profile %s: dir is required", name)
 	}

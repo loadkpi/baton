@@ -38,7 +38,8 @@ func lsRows(t *testing.T, env *batontest.Env) [][]string {
 	return rows
 }
 
-// lsRowsRaw runs `baton ls` and returns the lines under the header as cells.
+// lsRowsRaw runs `baton ls` and returns the lines under the header, up to the
+// blank line that ends the table, as cells.
 func lsRowsRaw(t *testing.T, env *batontest.Env) [][]string {
 	t.Helper()
 	res := env.Run("ls")
@@ -51,6 +52,9 @@ func lsRowsRaw(t *testing.T, env *batontest.Env) [][]string {
 	}
 	var rows [][]string
 	for _, line := range lines[1:] {
+		if line == "" {
+			break // the hints under the table
+		}
 		rows = append(rows, strings.Fields(line))
 	}
 	return rows

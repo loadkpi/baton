@@ -4,6 +4,9 @@ package profilename
 import (
 	"fmt"
 	"regexp"
+
+	"github.com/loadkpi/baton/business/types/agent"
+	"github.com/loadkpi/baton/business/types/projectname"
 )
 
 // pattern keeps a name safe to use as a file name: Baton stores per-Profile
@@ -26,4 +29,10 @@ func Parse(s string) (Name, error) {
 // String returns the name as written in the config.
 func (n Name) String() string {
 	return n.value
+}
+
+// Sandbox is the name of an Agent's Profile inside a Project's sandbox:
+// <project>.<agent>.
+func Sandbox(project projectname.Name, a agent.Agent) (Name, error) {
+	return Parse(project.String() + "." + a.String())
 }

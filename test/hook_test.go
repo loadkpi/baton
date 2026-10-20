@@ -18,7 +18,14 @@ import (
 // README) with the session id and the directory of the test.
 func payload(t *testing.T, event, sessionID, cwd string) string {
 	t.Helper()
-	data, err := os.ReadFile(filepath.Join("testdata", "claude-hooks", event+".json"))
+	return fixture(t, "claude", event, sessionID, cwd)
+}
+
+// fixture returns the payload fixture of an Agent's Event (testdata/<agent>-hooks)
+// with the session id and the directory of the test.
+func fixture(t *testing.T, agentName, event, sessionID, cwd string) string {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join("testdata", agentName+"-hooks", event+".json"))
 	if err != nil {
 		t.Fatal(err)
 	}
