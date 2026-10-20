@@ -14,8 +14,8 @@ type Containers interface {
 	// Running returns the full ids of the containers that run now.
 	Running(ctx context.Context) ([]string, error)
 	// ProcessStarts returns the start times (clock ticks since boot) of those
-	// of pids that run in the container, which is the PID namespace they were
-	// recorded in. Missing PIDs are not in the map.
+	// of pids that run in the container (a zombie does not), which is the PID
+	// namespace they were recorded in. Missing PIDs are not in the map.
 	ProcessStarts(ctx context.Context, container string, pids []int) (map[int]uint64, error)
 }
 

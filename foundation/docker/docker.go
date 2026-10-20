@@ -61,7 +61,8 @@ const readStats = `for p in "$@"; do cat "/proc/$p/stat" 2>/dev/null; done; exit
 
 // ProcessStarts returns, for the PIDs that run in the container, their start
 // times in clock ticks since boot (field 22 of /proc/<pid>/stat); a PID that
-// does not run is not in the map. It costs one `docker exec` whatever the
+// does not run is not in the map, and a zombie or dead process (state Z or X,
+// whose stat file is still there) does not run. It costs one `docker exec` whatever the
 // number of PIDs, and needs only sh and cat in the container.
 func (c Client) ProcessStarts(ctx context.Context, container string, pids []int) (map[int]uint64, error) {
 	args := []string{"exec", container, "sh", "-c", readStats, "sh"}
@@ -81,6 +82,9 @@ func (c Client) ProcessStarts(ctx context.Context, container string, pids []int)
 		p, err := procfs.ParseStat(line)
 		if err != nil {
 			return nil, fmt.Errorf("docker exec %s: %w", container, err)
+		}
+		if p.Exited() {
+			continue
 		}
 		starts[p.PID] = p.Start
 	}

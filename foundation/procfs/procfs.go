@@ -15,12 +15,21 @@ type Process struct {
 	PPID int
 	// Comm is the name the kernel keeps for the process (at most 15 bytes).
 	Comm string
+	// State is the one-letter state (field 3 of /proc/<pid>/stat): R, S, D, Z...
+	State string
 	// ExeBase is the base name of the executable the process runs; empty
 	// when it cannot be read (another user's process, a kernel thread).
 	ExeBase string
 	// Start is when the process started, in clock ticks since boot (field
 	// 22 of /proc/<pid>/stat). A reused PID has another start time.
 	Start uint64
+}
+
+// Exited is true for a process that has finished but is still in /proc: a zombie
+// (Z, killed and waiting for its parent to reap it) or dead (X). Its stat file
+// exists, yet nothing runs.
+func (p Process) Exited() bool {
+	return p.State == "Z" || p.State == "X"
 }
 
 // Read returns the process with the given PID.
@@ -65,5 +74,5 @@ func ParseStat(stat string) (Process, error) {
 	if err != nil {
 		return Process{}, err
 	}
-	return Process{PID: pid, PPID: ppid, Comm: stat[open+1 : closing], Start: start}, nil
+	return Process{PID: pid, PPID: ppid, Comm: stat[open+1 : closing], State: rest[0], Start: start}, nil
 }

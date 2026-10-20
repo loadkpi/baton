@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/loadkpi/baton/internal/batontest"
 )
@@ -94,17 +95,77 @@ func sleeper(t *testing.T) (*exec.Cmd, uint64) {
 		_ = cmd.Process.Kill()
 		_ = cmd.Wait()
 	})
-	data, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", cmd.Process.Pid))
+	_, start := readStat(t, cmd.Process.Pid)
+	return cmd, start
+}
+
+// readStat returns the state (field 3) and the start time (field 22) of a
+// process as /proc has them.
+func readStat(t *testing.T, pid int) (state string, start uint64) {
+	t.Helper()
+	data, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid))
 	if err != nil {
 		t.Fatal(err)
 	}
 	stat := string(data)
 	fields := strings.Fields(stat[strings.LastIndexByte(stat, ')')+1:])
-	start, err := strconv.ParseUint(fields[19], 10, 64)
+	start, err = strconv.ParseUint(fields[19], 10, 64)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return cmd, start
+	return fields[0], start
+}
+
+// zombiePID makes a zombie: a process that was killed (here, it finished) and
+// whose parent does not reap it. The shell starts a short `sleep` in the
+// background and then becomes a long `sleep`, which never waits for children.
+// It returns the zombie's PID and start time.
+func zombiePID(t *testing.T) (pid int, start uint64) {
+	t.Helper()
+	parent := exec.Command("sh", "-c", "sleep 0.1 & exec sleep 300")
+	if err := parent.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = parent.Process.Kill()
+		_ = parent.Wait()
+	})
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		if child := childOf(t, parent.Process.Pid); child != 0 {
+			if state, start := readStat(t, child); state == "Z" {
+				return child, start
+			}
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatal("no zombie child appeared")
+	return 0, 0
+}
+
+// childOf returns the PID of a child of parent, or 0 when it has none (yet).
+func childOf(t *testing.T, parent int) int {
+	t.Helper()
+	entries, err := os.ReadDir("/proc")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		pid, err := strconv.Atoi(e.Name())
+		if err != nil {
+			continue
+		}
+		data, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid))
+		if err != nil {
+			continue // it exited meanwhile
+		}
+		stat := string(data)
+		fields := strings.Fields(stat[strings.LastIndexByte(stat, ')')+1:])
+		if ppid, err := strconv.Atoi(fields[1]); err == nil && ppid == parent {
+			return pid
+		}
+	}
+	return 0
 }
 
 func TestLost_AHostSessionWhoseAgentProcessIsGoneShowsAsLost(t *testing.T) {
@@ -129,6 +190,19 @@ func TestLost_AHostSessionWhoseAgentProcessRunsStaysWithTheStatusOfItsEvents(t *
 
 	if len(rows) != 1 || rows[0][5] != "running" {
 		t.Errorf("rows = %v, want one Session with status running", rows)
+	}
+}
+
+func TestLost_AHostSessionWhoseAgentIsAZombieShowsAsLost(t *testing.T) {
+	env := newEnv(t)
+	repo := newRepo(t, env, "my-app")
+	pid, start := zombiePID(t) // killed, but its parent has not reaped it: /proc/<pid>/stat still exists
+	hostEvent(t, env, "s1", "2031-03-04T10:00:00Z", "PreToolUse", repo, proc{host: thisHost(t), pid: pid, start: start})
+
+	rows := lsRows(t, env)
+
+	if len(rows) != 1 || rows[0][5] != "lost" {
+		t.Errorf("rows = %v, want one Session with status lost", rows)
 	}
 }
 
@@ -319,10 +393,21 @@ func (d *fakeDocker) process(id string, pid int, comm string, start uint64) {
 	d.env.WriteFile(fmt.Sprintf("docker-fixtures/%s/proc/%d/stat", id, pid), statLine(pid, comm, start))
 }
 
+// processInState makes pid exist in the container in the given state.
+func (d *fakeDocker) processInState(id string, pid int, comm, state string, start uint64) {
+	d.t.Helper()
+	d.env.WriteFile(fmt.Sprintf("docker-fixtures/%s/proc/%d/stat", id, pid), stateLine(pid, comm, state, start))
+}
+
 // statLine is /proc/<pid>/stat as the kernel prints it, with the start time in
 // field 22.
 func statLine(pid int, comm string, start uint64) string {
-	return fmt.Sprintf("%d (%s) S 1 %d %d 0 -1 4194560 100 0 0 0 1 1 0 0 20 0 1 0 %d 1000000 500 18446744073709551615\n", pid, comm, pid, pid, start)
+	return stateLine(pid, comm, "S", start)
+}
+
+// stateLine is statLine for a process in the given state (field 3).
+func stateLine(pid int, comm, state string, start uint64) string {
+	return fmt.Sprintf("%d (%s) %s 1 %d %d 0 -1 4194560 100 0 0 0 1 1 0 0 20 0 1 0 %d 1000000 500 18446744073709551615\n", pid, comm, state, pid, pid, start)
 }
 
 // calls returns the arguments of the docker calls whose first argument is verb.
@@ -376,6 +461,26 @@ func TestLost_ASandboxSessionIsLostWhenItsPIDIsGoneFromARunningContainerOrIsAnot
 	sandboxEvent(t, env, "s1", "2031-03-04T10:00:00Z", "PreToolUse", proc{host: "aaaaaaaaaaaa", pid: 100, start: 5000})
 	sandboxEvent(t, env, "s2", "2031-03-04T10:01:00Z", "PreToolUse", proc{host: "aaaaaaaaaaaa", pid: 200, start: 6000})
 	sandboxEvent(t, env, "s3", "2031-03-04T10:02:00Z", "Stop", proc{host: "aaaaaaaaaaaa", pid: 300, start: 6000})
+
+	rows := lsRows(t, env) // the most recent first: s3, s2, s1
+
+	if want := []string{"lost", "lost", "running"}; !reflect.DeepEqual(statuses(rows), want) {
+		t.Errorf("statuses = %v, want %v", statuses(rows), want)
+	}
+}
+
+func TestLost_ASandboxSessionWhoseAgentIsAZombieOrDeadIsLost(t *testing.T) {
+	env := newEnv(t)
+	launchProject(t, env)
+	newOK(t, env)
+	id := containerID("aaaaaaaaaaaa")
+	docker := newFakeDocker(t, env, id)
+	docker.process(id, 100, "claude", 5000)             // s1: the Agent runs
+	docker.processInState(id, 200, "claude", "Z", 6000) // s2: killed, not reaped by its parent
+	docker.processInState(id, 300, "claude", "X", 7000) // s3: dead
+	sandboxEvent(t, env, "s1", "2031-03-04T10:00:00Z", "PreToolUse", proc{host: "aaaaaaaaaaaa", pid: 100, start: 5000})
+	sandboxEvent(t, env, "s2", "2031-03-04T10:01:00Z", "PreToolUse", proc{host: "aaaaaaaaaaaa", pid: 200, start: 6000})
+	sandboxEvent(t, env, "s3", "2031-03-04T10:02:00Z", "PreToolUse", proc{host: "aaaaaaaaaaaa", pid: 300, start: 7000})
 
 	rows := lsRows(t, env) // the most recent first: s3, s2, s1
 

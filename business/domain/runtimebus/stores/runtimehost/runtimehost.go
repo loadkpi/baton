@@ -84,8 +84,8 @@ func (*Runtime) HostPath(context.Context, projectname.Name, string) (string, err
 	return "", runtimebus.ErrNotImplemented
 }
 
-// Alive checks /proc: a Process runs when its PID exists and has the recorded
-// start time (a reused PID has another). An Event from another machine, which
+// Alive checks /proc: a Process runs when its PID exists, is not a zombie or dead
+// (state Z or X) and has the recorded start time (a reused PID has another). An Event from another machine, which
 // is what a different host name means (another computer, or a container),
 // says nothing about this machine's /proc and is not judged.
 func (r *Runtime) Alive(_ context.Context, procs []runtimebus.Process) ([]runtimebus.Liveness, error) {
@@ -107,6 +107,9 @@ func (r *Runtime) Alive(_ context.Context, procs []runtimebus.Process) ([]runtim
 			out[i] = runtimebus.ProcessGone
 		case err != nil:
 			// Unreadable is not the same as gone.
+		case found.Exited():
+			// A zombie keeps its stat file until the parent reaps it.
+			out[i] = runtimebus.ProcessGone
 		case found.Start == p.Start:
 			out[i] = runtimebus.ProcessAlive
 		default:
