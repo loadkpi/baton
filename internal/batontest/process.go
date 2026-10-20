@@ -58,6 +58,8 @@ func (e *Env) Start(args ...string) *Process {
 	p.cmd.Dir = e.Home
 	p.cmd.Env = e.Environ()
 	p.cmd.Stdout, p.cmd.Stderr = &p.stdout, &p.stderr
+	// Its own process group, so the cleanup can end the stubs it started too.
+	p.cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	if err := p.cmd.Start(); err != nil {
 		e.t.Fatalf("start baton %v: %v", args, err)
 	}
@@ -66,8 +68,16 @@ func (e *Env) Start(args ...string) *Process {
 		close(p.done)
 	}()
 	e.t.Cleanup(func() {
-		_ = p.cmd.Process.Kill()
+		// A stub that baton started must not outlive the test: it would write
+		// its call into the Env's directory while the test removes it.
+		pgid := p.cmd.Process.Pid
+		_ = syscall.Kill(-pgid, syscall.SIGKILL)
 		<-p.done
+		for deadline := time.Now().Add(processTimeout); time.Now().Before(deadline); time.Sleep(time.Millisecond) {
+			if syscall.Kill(-pgid, 0) == syscall.ESRCH {
+				break // no process of the group is left
+			}
+		}
 	})
 	return p
 }
