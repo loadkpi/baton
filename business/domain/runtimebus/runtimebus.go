@@ -64,8 +64,10 @@ type Runtime interface {
 	// Warnings are things the user should know that do not stop the sync.
 	Targets(ctx context.Context, cfg configbus.Config) (targets []syncbus.Target, warnings []string, err error)
 	// HostPath maps a path inside the Runtime (for example the cwd of an Event
-	// in a container) to the host path it stands for.
-	HostPath(ctx context.Context, p string) (string, error)
+	// in a container) to the host path it stands for. A container is a
+	// Project's: the mounts of two Projects' containers differ, so the Project
+	// says which one the path is seen from.
+	HostPath(ctx context.Context, project projectname.Name, p string) (string, error)
 	// Alive tells whether the Agent process of a Session still runs.
 	Alive(ctx context.Context, p Process) (bool, error)
 }

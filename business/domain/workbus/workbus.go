@@ -12,8 +12,11 @@ import (
 	"time"
 
 	"github.com/loadkpi/baton/business/domain/projectbus"
+	"github.com/loadkpi/baton/business/domain/runtimebus"
 	"github.com/loadkpi/baton/business/domain/sessionbus"
 	"github.com/loadkpi/baton/business/domain/taskbus"
+	"github.com/loadkpi/baton/business/types/projectname"
+	"github.com/loadkpi/baton/business/types/runtime"
 	"github.com/loadkpi/baton/business/types/taskref"
 )
 
@@ -22,12 +25,14 @@ type Bus struct {
 	sessions *sessionbus.Bus
 	projects *projectbus.Bus
 	tasks    *taskbus.Bus
+	runtimes map[runtime.Runtime]runtimebus.Runtime
 	now      func() time.Time
 }
 
-// New creates the domain over the three it joins.
-func New(sessions *sessionbus.Bus, projects *projectbus.Bus, tasks *taskbus.Bus) *Bus {
-	return &Bus{sessions: sessions, projects: projects, tasks: tasks, now: func() time.Time { return time.Now().UTC() }}
+// New creates the domain over the three it joins. The Runtimes map the
+// directories of Sessions inside their containers to host paths.
+func New(sessions *sessionbus.Bus, projects *projectbus.Bus, tasks *taskbus.Bus, runtimes map[runtime.Runtime]runtimebus.Runtime) *Bus {
+	return &Bus{sessions: sessions, projects: projects, tasks: tasks, runtimes: runtimes, now: func() time.Time { return time.Now().UTC() }}
 }
 
 // Placed is a Session with the place and the Task it belongs to.
@@ -83,25 +88,51 @@ func (b *Bus) List(ctx context.Context) ([]Placed, error) {
 // place finds the Working copy of each Session. Each directory is looked at
 // once.
 func (b *Bus) place(ctx context.Context, sessions []sessionbus.Session) ([]Placed, error) {
+	type key struct {
+		project projectname.Name
+		dir     string
+	}
 	type found struct {
 		place projectbus.Place
 		ok    bool
 	}
-	byDir := make(map[string]found)
+	byDir := make(map[key]found)
 	out := make([]Placed, 0, len(sessions))
 	for _, s := range sessions {
-		f, seen := byDir[s.CWD]
+		k := key{project: s.Project, dir: s.CWD}
+		f, seen := byDir[k]
 		if !seen {
-			place, ok, err := b.projects.Resolve(ctx, s.CWD)
-			if err != nil {
-				return nil, err
+			dir, ok := b.hostDir(ctx, s)
+			f = found{}
+			if ok {
+				place, inGit, err := b.projects.Resolve(ctx, dir)
+				if err != nil {
+					return nil, err
+				}
+				f = found{place: place, ok: inGit}
 			}
-			f = found{place: place, ok: ok}
-			byDir[s.CWD] = f
+			byDir[k] = f
 		}
 		out = append(out, Placed{Session: s, InGit: f.ok, Place: f.place})
 	}
 	return out, nil
+}
+
+// hostDir is the directory of a Session's first Event as a path of the host. A
+// Session on the host has it as it is. One in a container is mapped through the
+// mounts of its Runtime, never assumed to see the same paths; when that cannot
+// be done (the container was not started by Baton, or the directory is not
+// under a mount) the Session has no place.
+func (b *Bus) hostDir(ctx context.Context, s sessionbus.Session) (string, bool) {
+	if s.Project == (projectname.Name{}) {
+		return s.CWD, true
+	}
+	rt, ok := b.runtimes[s.Runtime]
+	if !ok {
+		return "", false
+	}
+	dir, err := rt.HostPath(ctx, s.Project, s.CWD)
+	return dir, err == nil
 }
 
 // ActiveError says that a Working copy cannot take another Session, or a

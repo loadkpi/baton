@@ -27,7 +27,7 @@ func runSync(ctx context.Context, c console, home string) int {
 
 	var targets []syncbus.Target
 	var warnings []string
-	for _, rt := range []runtimebus.Runtime{runtimehost.New(), runtimesandbox.New(projectbus.New(projectfile.New(filepath.Join(home, ".baton"))))} {
+	for _, rt := range []runtimebus.Runtime{runtimehost.New(), runtimesandbox.New(projectbus.New(projectfile.New(filepath.Join(home, ".baton"))), filepath.Join(home, ".baton"))} {
 		t, w, err := rt.Targets(ctx, cfg)
 		if err != nil {
 			return c.errorf("%s Runtime: %v", rt.Name(), err)

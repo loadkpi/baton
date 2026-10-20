@@ -28,9 +28,16 @@ func sandboxProject(t *testing.T, env *batontest.Env, name string) (repo, home s
 }
 
 // sandboxHookCommand is the command sync writes into a Profile inside a
-// sandbox: the binary where the container mounts it.
+// sandbox: the binary where the container mounts it, guarded so that a
+// container without it (an ai-sandbox started without Baton) stays silent.
+// Claude runs the string through a shell. Whether Codex does is not in its
+// documentation, so Codex gets the shell explicitly.
 func sandboxHookCommand(agentName, profile string) string {
-	return "/baton/bin/baton hook " + agentName + " --profile " + profile + " --runtime sandbox"
+	guarded := "[ -x /baton/bin/baton ] || exit 0; exec /baton/bin/baton hook " + agentName + " --profile " + profile + " --runtime sandbox"
+	if agentName == "codex" {
+		return "sh -c '" + guarded + "'"
+	}
+	return guarded
 }
 
 func TestSandboxSync_ClaudeProfileInsideTheSandboxGetsSkillsAndStatusHooks(t *testing.T) {

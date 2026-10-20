@@ -21,8 +21,29 @@ const codexHooksFile = "hooks.json"
 
 // hookCommand is the command line of Baton's status hook: the binary as the
 // Agent sees it, the Agent, the Profile and the Runtime it runs in.
+//
+// In a sandbox the line is guarded: an ai-sandbox that was started without
+// Baton does not have the binary, and its hooks must then do nothing and
+// succeed (ADR 0001). `exec` leaves no shell between the Agent and `baton
+// hook`. Claude Code runs a hook command with `sh -c`; the Codex documentation
+// does not say whether Codex uses a shell (DESIGN.md, ticket 09), so Codex gets
+// the shell explicitly. Host hooks are not guarded: `baton sync` warns when
+// the host binary is missing.
 func hookCommand(binary string, a agent.Agent, profile string, rt runtime.Runtime) string {
-	return shellWord(binary) + " hook " + a.String() + " --profile " + profile + " --runtime " + rt.String()
+	call := shellWord(binary) + " hook " + a.String() + " --profile " + profile + " --runtime " + rt.String()
+	if rt != runtime.Sandbox {
+		return call
+	}
+	guarded := "[ -x " + shellWord(binary) + " ] || exit 0; exec " + call
+	if a == agent.Codex {
+		return "sh -c " + shellQuote(guarded)
+	}
+	return guarded
+}
+
+// shellQuote always wraps s in single quotes.
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
 // hostHookBinary is the executable the hooks of host Profiles call, which is
@@ -37,7 +58,7 @@ func shellWord(s string) string {
 	if strings.Trim(s, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_/.-") == "" {
 		return s
 	}
-	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+	return shellQuote(s)
 }
 
 // hookGroup is the matcher group Baton adds to hooks.<Event>: no matcher, so

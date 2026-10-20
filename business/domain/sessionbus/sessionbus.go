@@ -12,6 +12,7 @@ import (
 
 	"github.com/loadkpi/baton/business/types/agent"
 	"github.com/loadkpi/baton/business/types/profilename"
+	"github.com/loadkpi/baton/business/types/projectname"
 	"github.com/loadkpi/baton/business/types/runtime"
 )
 
@@ -67,7 +68,14 @@ type Storer interface {
 }
 
 // SessionRef names the Event file of one Session to the storage.
-type SessionRef string
+type SessionRef struct {
+	// Project is the Project whose Baton directory holds the file: the Event
+	// files of Sessions in a container are written there, through the mount.
+	// The zero value is a host Session, whose file is in ~/.baton/sessions.
+	Project projectname.Name
+	// File is the name of the file.
+	File string
+}
 
 // Machine is what the hook can learn about the machine it runs on.
 type Machine interface {

@@ -75,6 +75,20 @@ func (e *Env) RunWithStdin(stdin string, args ...string) Result {
 	return e.run(stdin, e.bin, args...)
 }
 
+// RunWithEnv is RunWithStdin with extra environment variables ("NAME=value")
+// added to the isolated environment, for the few things that are read from it.
+func (e *Env) RunWithEnv(extra []string, stdin string, args ...string) Result {
+	e.t.Helper()
+	return e.runEnv(extra, stdin, e.bin, args...)
+}
+
+// RunProgram runs any program from the Env's PATH with extra environment
+// variables ("NAME=value") and the given standard input, in HOME.
+func (e *Env) RunProgram(extra []string, stdin, name string, args ...string) Result {
+	e.t.Helper()
+	return e.runEnv(extra, stdin, name, args...)
+}
+
 // Command runs any program from the Env's PATH (a stub, git, ...) in HOME,
 // with the same isolated environment baton gets.
 func (e *Env) Command(name string, args ...string) Result {
@@ -84,12 +98,17 @@ func (e *Env) Command(name string, args ...string) Result {
 
 func (e *Env) run(stdin, name string, args ...string) Result {
 	e.t.Helper()
+	return e.runEnv(nil, stdin, name, args...)
+}
+
+func (e *Env) runEnv(extra []string, stdin, name string, args ...string) Result {
+	e.t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
 	cmd := exec.CommandContext(ctx, e.lookPath(name), args...)
 	cmd.Dir = e.Home
-	cmd.Env = e.Environ()
+	cmd.Env = append(e.Environ(), extra...)
 	cmd.Stdin = strings.NewReader(stdin)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr

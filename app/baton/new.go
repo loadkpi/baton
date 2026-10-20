@@ -16,9 +16,12 @@ import (
 	"github.com/loadkpi/baton/business/domain/launchbus/stores/launchguake"
 	"github.com/loadkpi/baton/business/domain/projectbus"
 	"github.com/loadkpi/baton/business/domain/projectbus/stores/projectfile"
+	"github.com/loadkpi/baton/business/domain/runtimebus"
 	"github.com/loadkpi/baton/business/domain/runtimebus/stores/runtimehost"
+	"github.com/loadkpi/baton/business/domain/runtimebus/stores/runtimesandbox"
 	"github.com/loadkpi/baton/business/types/agent"
 	"github.com/loadkpi/baton/business/types/profilename"
+	"github.com/loadkpi/baton/business/types/runtime"
 	"github.com/loadkpi/baton/business/types/taskref"
 )
 
@@ -57,22 +60,39 @@ func runNew(ctx context.Context, c console, home string, args []string) int {
 	if err != nil {
 		return c.errorf("%v", err)
 	}
-	profile, err := cfg.SelectProfile(a, chosen)
-	if err != nil {
-		return c.errorf("%v", err)
-	}
-
 	place, err := findPlace(ctx, home, parsed.project)
 	if err != nil {
 		return c.errorf("%v", err)
 	}
 
+	// The Profile of a host Session is chosen from the config; the Profiles
+	// inside a sandbox are the Project's own (<project>.<agent>) and are not.
+	var profile configbus.Profile
+	switch {
+	case place.Project.Runtime == runtime.Host:
+		if profile, err = cfg.SelectProfile(a, chosen); err != nil {
+			return c.errorf("%v", err)
+		}
+	case parsed.profile != "":
+		return c.errorf("project %s runs in the %s Runtime, which has Profiles of its own; --profile applies to host Sessions only", place.Project.Name, place.Project.Runtime)
+	}
+
 	req := launchbus.Request{Home: home, Place: place, Task: task, Agent: a, Profile: profile}
-	work := newWorkBus(filepath.Join(home, ".baton"))
-	if err := launchbus.New(launchguake.New(), work, runtimehost.New()).Start(ctx, req); err != nil {
+	batonDir := filepath.Join(home, ".baton")
+	if err := launchbus.New(launchguake.New(), newWorkBus(batonDir), startable(batonDir, c.stderr)).Start(ctx, req); err != nil {
 		return c.errorf("%v", err)
 	}
 	return exitOK
+}
+
+// startable are the Runtimes that can start an Agent. The sandbox says what it
+// is doing (building an image can take minutes) on log.
+func startable(batonDir string, log io.Writer) map[runtime.Runtime]runtimebus.Runtime {
+	projects := projectbus.New(projectfile.New(batonDir))
+	return map[runtime.Runtime]runtimebus.Runtime{
+		runtime.Host:    runtimehost.New(),
+		runtime.Sandbox: runtimesandbox.New(projects, batonDir).WithLog(log),
+	}
 }
 
 // parseNewArgs splits the command line into the Project, the optional Task and

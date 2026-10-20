@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/loadkpi/baton/business/domain/runtimebus/stores/runtimesandbox"
 	"github.com/loadkpi/baton/business/domain/sessionbus"
 	"github.com/loadkpi/baton/business/domain/sessionbus/stores/sessionfile"
 	"github.com/loadkpi/baton/business/domain/sessionbus/stores/sessionproc"
@@ -15,6 +16,13 @@ import (
 	"github.com/loadkpi/baton/business/types/profilename"
 	"github.com/loadkpi/baton/business/types/runtime"
 )
+
+// containerRootVar names the one environment variable `baton hook` reads: the
+// directory that stands for the root of the container, "/" when it is not set.
+// It exists so that tests, which cannot write to /baton, can put the mount of a
+// sandbox container somewhere else. It is read only for --runtime sandbox, so
+// it has no effect on a host Session, and nothing else reads it.
+const containerRootVar = "BATON_CONTAINER_ROOT"
 
 // runHook implements `baton hook <agent> --profile <name> --runtime <runtime>`,
 // which Agents call from their hooks. It reads the payload from standard input
@@ -37,12 +45,24 @@ func runHook(ctx context.Context, c console, home string, args []string) int {
 		return c.errorf("hook: usage: baton hook <agent> --profile <name> --runtime <host|sandbox|compose>")
 	}
 
+	storer := sessionfile.New(filepath.Join(home, ".baton"))
+	if *runtimeName == runtime.Sandbox.String() {
+		// In a container the Project's Baton directory is mounted. Without
+		// the mount this is an ai-sandbox started without Baton (ADR 0001):
+		// there is nobody to tell, and the Agent must not notice.
+		projectDir := filepath.Join(os.Getenv(containerRootVar), runtimesandbox.ContainerProject)
+		if info, err := os.Stat(projectDir); err != nil || !info.IsDir() {
+			return exitOK
+		}
+		storer = sessionfile.NewMounted(projectDir)
+	}
+
 	h, err := toBusHook(agentName, *profileName, *runtimeName, os.Getppid(), c.stdin)
 	if err != nil {
 		return c.errorf("hook: %v", err)
 	}
 
-	bus := sessionbus.New(sessionfile.New(filepath.Join(home, ".baton")), sessionproc.New())
+	bus := sessionbus.New(storer, sessionproc.New())
 	if err := bus.Record(ctx, h); err != nil {
 		return c.errorf("hook: %v", err)
 	}

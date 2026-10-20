@@ -7,15 +7,20 @@ import (
 
 	"github.com/loadkpi/baton/business/types/agent"
 	"github.com/loadkpi/baton/business/types/profilename"
+	"github.com/loadkpi/baton/business/types/projectname"
 	"github.com/loadkpi/baton/business/types/runtime"
 	"github.com/loadkpi/baton/business/types/status"
 )
 
 // Session is one native Agent conversation, as its Events show it.
 type Session struct {
-	Agent     agent.Agent
-	Profile   profilename.Name
-	Runtime   runtime.Runtime
+	Agent   agent.Agent
+	Profile profilename.Name
+	Runtime runtime.Runtime
+	// Project is the Project whose Baton directory holds the Session's
+	// Events, for a Session in a container; the zero value for the host. It
+	// says which container CWD is seen from.
+	Project   projectname.Name
 	SessionID string
 	// CWD is the directory of the Session's first Event, which decides its
 	// Project. Later Events may come from other directories.
@@ -55,7 +60,7 @@ func (b *Bus) List(ctx context.Context) ([]Session, error) {
 		}
 
 		s := Session{
-			Agent: first.Agent, Profile: first.Profile, Runtime: first.Runtime,
+			Agent: first.Agent, Profile: first.Profile, Runtime: first.Runtime, Project: ref.Project,
 			SessionID: first.SessionID, CWD: first.CWD,
 			Status: status.Unknown, Since: first.TS, Started: first.TS, Last: first.TS,
 		}

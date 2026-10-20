@@ -38,29 +38,37 @@ type Request struct {
 type Bus struct {
 	terminal Terminal
 	work     *workbus.Bus
-	host     runtimebus.Runtime
+	runtimes map[runtime.Runtime]runtimebus.Runtime
 }
 
 // New creates the domain over a Terminal, the domain that decides the Task and
-// the Runtime of Sessions on the host. The other Runtimes join when baton new
-// can start them (ticket 09).
-func New(terminal Terminal, work *workbus.Bus, host runtimebus.Runtime) *Bus {
-	return &Bus{terminal: terminal, work: work, host: host}
+// the Runtimes that can start an Agent. A Project whose Runtime is not among
+// them (compose, until ticket 17) is refused.
+func New(terminal Terminal, work *workbus.Bus, runtimes map[runtime.Runtime]runtimebus.Runtime) *Bus {
+	return &Bus{terminal: terminal, work: work, runtimes: runtimes}
 }
 
 // Start makes the Task of the request the current one of the Working copy and
 // opens a tab that runs the Agent in it. Nothing is changed when the Project's
-// Runtime cannot be started yet or when the Working copy has an active Session.
+// Runtime cannot be started yet, when its Sessions may not run in this Working
+// copy or when the Working copy has an active Session.
 func (b *Bus) Start(ctx context.Context, r Request) error {
 	project := r.Place.Project
-	if project.Runtime != runtime.Host {
+	rt, ok := b.runtimes[project.Runtime]
+	if !ok {
 		return fmt.Errorf("project %s runs in the %s Runtime, which baton new cannot start yet", project.Name, project.Runtime)
+	}
+	// A git worktree stores the host path of its git directory, which does not
+	// exist inside a container, and has no sandbox of its own (DESIGN.md, D3).
+	if project.Runtime != runtime.Host && r.Place.WorkingCopy != project.Path {
+		return fmt.Errorf("project %s runs in the %s Runtime, whose Sessions run only in the main checkout %s, not in the worktree %s",
+			project.Name, project.Runtime, project.Path, r.Place.WorkingCopy)
 	}
 	task, err := b.work.Begin(ctx, r.Place, r.Task)
 	if err != nil {
 		return err
 	}
-	tab, err := b.host.Start(ctx, runtimebus.StartRequest{
+	tab, err := rt.Start(ctx, runtimebus.StartRequest{
 		Home:        r.Home,
 		Project:     project.Name,
 		WorkingCopy: r.Place.WorkingCopy,

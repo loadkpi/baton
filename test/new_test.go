@@ -304,23 +304,6 @@ func TestNew_BadArgumentsAreUsageErrorsAndOpenNoTab(t *testing.T) {
 	}
 }
 
-func TestNew_AProjectThatRunsInTheSandboxIsRefusedUntilThatRuntimeExists(t *testing.T) {
-	env := newEnv(t)
-	env.WriteConfig(newConfig(env, ""))
-	repo := newRepo(t, env, "my-app")
-	env.WriteFile(repo+"/.ai-sandbox/run.sh", "#!/bin/sh\n", true)
-
-	res := env.Run("new", repo, "--agent", "claude")
-
-	want := "baton: project my-app runs in the sandbox Runtime, which baton new cannot start yet\n"
-	if res.ExitCode != 1 || res.Stderr != want {
-		t.Errorf("exit code = %d, stderr=%q, want %q", res.ExitCode, res.Stderr, want)
-	}
-	if calls := env.Calls("guake"); len(calls) != 0 {
-		t.Errorf("guake was called: %v", calls)
-	}
-}
-
 func TestNew_ARefusedGuakeIsReported(t *testing.T) {
 	env := newEnv(t)
 	env.WriteConfig(newConfig(env, ""))

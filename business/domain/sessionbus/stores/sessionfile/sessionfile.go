@@ -15,6 +15,7 @@ import (
 	"github.com/loadkpi/baton/business/domain/sessionbus"
 	"github.com/loadkpi/baton/business/types/agent"
 	"github.com/loadkpi/baton/business/types/profilename"
+	"github.com/loadkpi/baton/business/types/projectname"
 	"github.com/loadkpi/baton/business/types/runtime"
 	"github.com/loadkpi/baton/foundation/jsonl"
 )
@@ -22,14 +23,27 @@ import (
 // eventVersion is the schema version of an Event line.
 const eventVersion = 1
 
-// Store keeps the Event files of host Sessions in <baton dir>/sessions.
+// Store keeps the Event files of host Sessions in <baton dir>/sessions, and
+// reads those of Sessions in containers, which are in the Baton directory of
+// their Project: <baton dir>/projects/<project>/sessions.
 type Store struct {
+	// root is the Baton state directory, where readers look for Event files.
+	// It is empty for the storage of a hook in a container, which only writes.
+	root string
+	// dir is where SaveEvent writes.
 	dir string
 }
 
 // New creates the storage. batonDir is the Baton state directory (~/.baton).
 func New(batonDir string) *Store {
-	return &Store{dir: filepath.Join(batonDir, "sessions")}
+	return &Store{root: batonDir, dir: filepath.Join(batonDir, "sessions")}
+}
+
+// NewMounted creates the storage of a hook inside a container, where the
+// Project's Baton directory is mounted at projectDir: Events go into its
+// sessions directory. It lists nothing.
+func NewMounted(projectDir string) *Store {
+	return &Store{dir: filepath.Join(projectDir, "sessions")}
 }
 
 // fileEvent is the JSON document of one Event line. Primitive types only.
@@ -67,8 +81,21 @@ func toFileEvent(e sessionbus.Event) fileEvent {
 	}
 }
 
-func (s *Store) path(agent, sessionID string) string {
+// eventPath is the file SaveEvent appends the Events of a Session to.
+func (s *Store) eventPath(agent, sessionID string) string {
 	return filepath.Join(s.dir, agent+"-"+sessionID+".jsonl")
+}
+
+// refDir is the directory that holds the Event files of ref's kind.
+func (s *Store) refDir(project projectname.Name) string {
+	if project == (projectname.Name{}) {
+		return filepath.Join(s.root, "sessions")
+	}
+	return filepath.Join(s.root, "projects", project.String(), "sessions")
+}
+
+func (s *Store) refPath(ref sessionbus.SessionRef) string {
+	return filepath.Join(s.refDir(ref.Project), ref.File)
 }
 
 // SaveEvent appends the Event to <dir>/<agent>-<session id>.jsonl, mode 0600.
@@ -81,13 +108,41 @@ func (s *Store) SaveEvent(_ context.Context, e sessionbus.Event) error {
 	if err := enc.Encode(toFileEvent(e)); err != nil {
 		return err
 	}
-	return jsonl.Append(s.path(e.Agent.String(), e.SessionID), bytes.TrimRight(line.Bytes(), "\n"), 0o600)
+	return jsonl.Append(s.eventPath(e.Agent.String(), e.SessionID), bytes.TrimRight(line.Bytes(), "\n"), 0o600)
 }
 
-// QuerySessions lists the *.jsonl files of the directory. A missing directory
-// holds no Sessions.
+// QuerySessions lists the *.jsonl files of the host's sessions directory and of
+// the sessions directory of every Project. A missing directory holds no
+// Sessions.
 func (s *Store) QuerySessions(_ context.Context) ([]sessionbus.SessionRef, error) {
-	entries, err := os.ReadDir(s.dir)
+	refs, err := s.queryDir(projectname.Name{})
+	if err != nil {
+		return nil, err
+	}
+
+	projects, err := os.ReadDir(filepath.Join(s.root, "projects"))
+	if os.IsNotExist(err) {
+		return refs, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	for _, p := range projects {
+		name, err := projectname.Parse(p.Name())
+		if err != nil || !p.IsDir() {
+			continue // the lock file, or something that is not a Project's directory
+		}
+		more, err := s.queryDir(name)
+		if err != nil {
+			return nil, err
+		}
+		refs = append(refs, more...)
+	}
+	return refs, nil
+}
+
+func (s *Store) queryDir(project projectname.Name) ([]sessionbus.SessionRef, error) {
+	entries, err := os.ReadDir(s.refDir(project))
 	if os.IsNotExist(err) {
 		return nil, nil
 	}
@@ -97,7 +152,7 @@ func (s *Store) QuerySessions(_ context.Context) ([]sessionbus.SessionRef, error
 	var refs []sessionbus.SessionRef
 	for _, e := range entries {
 		if e.Type().IsRegular() && strings.HasSuffix(e.Name(), ".jsonl") {
-			refs = append(refs, sessionbus.SessionRef(e.Name()))
+			refs = append(refs, sessionbus.SessionRef{Project: project, File: e.Name()})
 		}
 	}
 	return refs, nil
@@ -105,7 +160,7 @@ func (s *Store) QuerySessions(_ context.Context) ([]sessionbus.SessionRef, error
 
 // QueryFirstEvent returns the first line of the file that is an Event.
 func (s *Store) QueryFirstEvent(_ context.Context, ref sessionbus.SessionRef) (e sessionbus.Event, ok bool, err error) {
-	err = jsonl.Forward(filepath.Join(s.dir, string(ref)), func(line []byte) bool {
+	err = jsonl.Forward(s.refPath(ref), func(line []byte) bool {
 		var parsed error
 		if e, parsed = toBusEvent(line); parsed != nil {
 			return true // not an Event; the next line may be
@@ -119,7 +174,7 @@ func (s *Store) QueryFirstEvent(_ context.Context, ref sessionbus.SessionRef) (e
 // QueryEventsBackward passes the lines of the file that are Events, newest
 // first.
 func (s *Store) QueryEventsBackward(_ context.Context, ref sessionbus.SessionRef, yield func(sessionbus.Event) bool) error {
-	return jsonl.Backward(filepath.Join(s.dir, string(ref)), func(line []byte) bool {
+	return jsonl.Backward(s.refPath(ref), func(line []byte) bool {
 		e, err := toBusEvent(line)
 		if err != nil {
 			return true

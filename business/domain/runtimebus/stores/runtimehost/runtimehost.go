@@ -9,6 +9,7 @@ import (
 	"github.com/loadkpi/baton/business/domain/runtimebus"
 	"github.com/loadkpi/baton/business/domain/syncbus"
 	"github.com/loadkpi/baton/business/domain/syncbus/stores/syncfile"
+	"github.com/loadkpi/baton/business/types/projectname"
 	"github.com/loadkpi/baton/business/types/runtime"
 )
 
@@ -74,7 +75,7 @@ func (*Runtime) Targets(_ context.Context, cfg configbus.Config) ([]syncbus.Targ
 }
 
 // HostPath is filled in when a ticket needs it.
-func (*Runtime) HostPath(context.Context, string) (string, error) {
+func (*Runtime) HostPath(context.Context, projectname.Name, string) (string, error) {
 	return "", runtimebus.ErrNotImplemented
 }
 

@@ -5,6 +5,7 @@ package runtimesandbox
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -20,10 +21,19 @@ import (
 	"github.com/loadkpi/baton/business/types/runtime"
 )
 
-// ContainerBinary is where the container mounts the Baton binary (read-only),
-// and the path the hooks of every Profile in a sandbox call. ai-sandbox does not
-// know it: the mount is added by the print-args wrapper of ticket 09.
-const ContainerBinary = "/baton/bin/baton"
+// The two Baton mounts of a sandbox container (DESIGN.md, D3), at the paths
+// ticket 08 fixed. ai-sandbox does not know them: the print-args wrapper in
+// Start adds them.
+const (
+	// ContainerBinDir is where ~/.baton/bin is mounted, read-only.
+	ContainerBinDir = "/baton/bin"
+	// ContainerBinary is the Baton executable in it, the path the hooks of
+	// every Profile in a sandbox call.
+	ContainerBinary = ContainerBinDir + "/baton"
+	// ContainerProject is where the Project's Baton directory is mounted,
+	// read-write: the only part of ~/.baton the container sees.
+	ContainerProject = "/baton/project"
+)
 
 // Projects lists the registered Projects.
 type Projects interface {
@@ -33,20 +43,28 @@ type Projects interface {
 // Runtime is the sandbox.
 type Runtime struct {
 	projects Projects
+	batonDir string
+	log      io.Writer
 }
 
-// New creates the sandbox Runtime over the registered Projects.
-func New(projects Projects) *Runtime { return &Runtime{projects: projects} }
+// New creates the sandbox Runtime over the registered Projects. batonDir is the
+// Baton state directory (~/.baton), where it keeps the mounts of the
+// containers it started.
+func New(projects Projects, batonDir string) *Runtime {
+	return &Runtime{projects: projects, batonDir: batonDir, log: io.Discard}
+}
+
+// WithLog sends what a start has to say to the user (a build of the image, the
+// notes of run.sh) to w, which is discarded by default.
+func (r *Runtime) WithLog(w io.Writer) *Runtime {
+	r.log = w
+	return r
+}
 
 var _ runtimebus.Runtime = (*Runtime)(nil)
 
 // Name is "sandbox".
 func (*Runtime) Name() runtime.Runtime { return runtime.Sandbox }
-
-// Start is filled in by ticket 09.
-func (*Runtime) Start(context.Context, runtimebus.StartRequest) (runtimebus.Tab, error) {
-	return runtimebus.Tab{}, runtimebus.ErrNotImplemented
-}
 
 // Targets are the Claude and Codex Profiles inside the sandboxes of the
 // registered Projects whose Runtime is sandbox. Inside the container HOME is
@@ -69,7 +87,7 @@ func (r *Runtime) Targets(ctx context.Context, cfg configbus.Config) ([]syncbus.
 			continue
 		}
 		sandboxed[p.Name] = true
-		home := filepath.Join(p.Path, ".ai-sandbox", "home")
+		home := homeOf(p)
 		if info, err := os.Stat(home); err != nil || !info.IsDir() {
 			warnings = append(warnings, fmt.Sprintf("project %s: skipped, %s does not exist; start its sandbox once with .ai-sandbox/run.sh", p.Name, home))
 			continue
@@ -102,12 +120,13 @@ func (r *Runtime) Targets(ctx context.Context, cfg configbus.Config) ([]syncbus.
 	return targets, warnings, nil
 }
 
-// HostPath is filled in by ticket 09.
-func (*Runtime) HostPath(context.Context, string) (string, error) {
-	return "", runtimebus.ErrNotImplemented
-}
-
 // Alive is filled in by ticket 11.
 func (*Runtime) Alive(context.Context, runtimebus.Process) (bool, error) {
 	return false, runtimebus.ErrNotImplemented
+}
+
+// homeOf is the sandbox's home directory on the host: HOME inside the
+// container (/home/sandbox) is a mount of it.
+func homeOf(p projectbus.Project) string {
+	return filepath.Join(p.Path, ".ai-sandbox", "home")
 }
