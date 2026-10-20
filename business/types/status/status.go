@@ -17,6 +17,9 @@ const (
 	WaitingApproval Status = "waiting_approval"
 	WaitingInput    Status = "waiting_input"
 	Ended           Status = "ended"
+	// Lost is never derived from an Event: it is what a reader makes of a
+	// Session that is not ended but whose Agent process or container is gone.
+	Lost Status = "lost"
 	// Unknown is for a Session whose Events are all of a kind this table does
 	// not know. A defensive fallback: Baton installs hooks only for known Events.
 	Unknown Status = "unknown"

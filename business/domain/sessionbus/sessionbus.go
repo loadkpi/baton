@@ -10,6 +10,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/loadkpi/baton/business/domain/runtimebus"
 	"github.com/loadkpi/baton/business/types/agent"
 	"github.com/loadkpi/baton/business/types/profilename"
 	"github.com/loadkpi/baton/business/types/projectname"
@@ -93,12 +94,22 @@ type Machine interface {
 
 // Bus is the Session domain.
 type Bus struct {
-	storer  Storer
-	machine Machine
-	now     func() time.Time
+	storer   Storer
+	machine  Machine
+	runtimes map[runtime.Runtime]runtimebus.Runtime
+	now      func() time.Time
 }
 
 // New creates the Session domain over the Event files and the machine.
 func New(storer Storer, machine Machine) *Bus {
 	return &Bus{storer: storer, machine: machine, now: time.Now}
+}
+
+// WithRuntimes lets the Bus tell whether the Agent of a Session still runs, by
+// asking the Runtime the Session's Events name. Without it (the hook has no use
+// for it) no Session is ever lost, and a Runtime that is not in the map judges
+// nothing.
+func (b *Bus) WithRuntimes(runtimes map[runtime.Runtime]runtimebus.Runtime) *Bus {
+	b.runtimes = runtimes
+	return b
 }

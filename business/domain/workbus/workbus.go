@@ -51,6 +51,9 @@ type Listing struct {
 	Sessions []Placed
 	// Silent are the Sessions Baton started that have reported no Event yet.
 	Silent []sessionbus.Launch
+	// Warnings are things the user should know that do not stop the listing:
+	// a Runtime that could not tell whether its Sessions still run.
+	Warnings []string
 }
 
 // List returns every Session, the most recently active first, with its place
@@ -58,7 +61,7 @@ type Listing struct {
 // that of the directory of its first Event. Reading registers the Projects the
 // Sessions are in, and gives a Session that has no Task an unnamed one.
 func (b *Bus) List(ctx context.Context) (Listing, error) {
-	sessions, err := b.sessions.List(ctx)
+	sessions, warnings, err := b.sessions.List(ctx)
 	if err != nil {
 		return Listing{}, err
 	}
@@ -94,7 +97,7 @@ func (b *Bus) List(ctx context.Context) (Listing, error) {
 			return Listing{}, err
 		}
 	}
-	return Listing{Sessions: out, Silent: silent}, nil
+	return Listing{Sessions: out, Silent: silent, Warnings: warnings}, nil
 }
 
 // place finds the Working copy of each Session. Each directory is looked at
@@ -167,7 +170,7 @@ func (e *ActiveError) Error() string {
 // the Working copy, and then changes nothing.
 func (b *Bus) Begin(ctx context.Context, place projectbus.Place, ref taskref.Ref) (taskbus.Task, error) {
 	guard := func(ctx context.Context) error {
-		sessions, err := b.sessions.List(ctx)
+		sessions, _, err := b.sessions.List(ctx)
 		if err != nil {
 			return err
 		}

@@ -29,6 +29,9 @@ func runLs(ctx context.Context, c console, home string, args []string) int {
 	if err != nil {
 		return c.errorf("%v", err)
 	}
+	for _, w := range listing.Warnings {
+		c.warnf("%s", w)
+	}
 	if len(listing.Sessions) == 0 && len(listing.Silent) == 0 {
 		c.println("no sessions")
 		return exitOK

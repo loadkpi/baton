@@ -30,7 +30,7 @@ func Read(pid int) (Process, error) {
 	if err != nil {
 		return Process{}, err
 	}
-	p, err := parseStat(string(data))
+	p, err := ParseStat(string(data))
 	if err != nil {
 		return Process{}, fmt.Errorf("%s/stat: %w", dir, err)
 	}
@@ -40,10 +40,10 @@ func Read(pid int) (Process, error) {
 	return p, nil
 }
 
-// parseStat reads "pid (comm) state ppid ... starttime ...". The name may
-// itself hold spaces and parentheses, so the fields are counted from the last
-// closing parenthesis.
-func parseStat(stat string) (Process, error) {
+// ParseStat reads the contents of /proc/<pid>/stat, "pid (comm) state ppid ...
+// starttime ...". The name may itself hold spaces and parentheses, so the
+// fields are counted from the last closing parenthesis.
+func ParseStat(stat string) (Process, error) {
 	open, closing := strings.IndexByte(stat, '('), strings.LastIndexByte(stat, ')')
 	if open < 0 || closing < open {
 		return Process{}, fmt.Errorf("unexpected format %q", stat)

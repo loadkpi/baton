@@ -3,6 +3,10 @@ package runtimehost
 
 import (
 	"context"
+	"errors"
+	"fmt"
+	"io/fs"
+	"os"
 	"path/filepath"
 
 	"github.com/loadkpi/baton/business/domain/configbus"
@@ -11,6 +15,7 @@ import (
 	"github.com/loadkpi/baton/business/domain/syncbus/stores/syncfile"
 	"github.com/loadkpi/baton/business/types/projectname"
 	"github.com/loadkpi/baton/business/types/runtime"
+	"github.com/loadkpi/baton/foundation/procfs"
 )
 
 // Runtime is the host.
@@ -79,7 +84,34 @@ func (*Runtime) HostPath(context.Context, projectname.Name, string) (string, err
 	return "", runtimebus.ErrNotImplemented
 }
 
-// Alive is filled in by ticket 11.
-func (*Runtime) Alive(context.Context, runtimebus.Process) (bool, error) {
-	return false, runtimebus.ErrNotImplemented
+// Alive checks /proc: a Process runs when its PID exists and has the recorded
+// start time (a reused PID has another). An Event from another machine, which
+// is what a different host name means (another computer, or a container),
+// says nothing about this machine's /proc and is not judged.
+func (r *Runtime) Alive(_ context.Context, procs []runtimebus.Process) ([]runtimebus.Liveness, error) {
+	out := make([]runtimebus.Liveness, len(procs))
+	if len(procs) == 0 {
+		return out, nil
+	}
+	here, err := os.Hostname()
+	if err != nil {
+		return out, fmt.Errorf("host name: %w", err)
+	}
+	for i, p := range procs {
+		if p.Host != here {
+			continue
+		}
+		found, err := procfs.Read(p.PID)
+		switch {
+		case errors.Is(err, fs.ErrNotExist):
+			out[i] = runtimebus.ProcessGone
+		case err != nil:
+			// Unreadable is not the same as gone.
+		case found.Start == p.Start:
+			out[i] = runtimebus.ProcessAlive
+		default:
+			out[i] = runtimebus.ProcessGone
+		}
+	}
+	return out, nil
 }

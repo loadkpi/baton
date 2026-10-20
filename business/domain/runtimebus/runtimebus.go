@@ -52,6 +52,22 @@ type Process struct {
 	Start uint64
 }
 
+// Liveness is what a Runtime can say about one Process.
+type Liveness int
+
+// The answers of Alive. The zero value is the safe one: a Process whose
+// Runtime could not tell is never taken for dead.
+const (
+	// ProcessUnknown means the Runtime could not judge: the Event is from
+	// another machine, docker did not answer, the PID was not recorded.
+	ProcessUnknown Liveness = iota
+	// ProcessAlive means the PID runs with the recorded start time.
+	ProcessAlive
+	// ProcessGone means the container, or the PID in it, is gone, or the PID
+	// runs with another start time.
+	ProcessGone
+)
+
 // Runtime is where Agents run.
 type Runtime interface {
 	// Name is the Runtime as written in files and shown in output.
@@ -68,6 +84,10 @@ type Runtime interface {
 	// Project's: the mounts of two Projects' containers differ, so the Project
 	// says which one the path is seen from.
 	HostPath(ctx context.Context, project projectname.Name, p string) (string, error)
-	// Alive tells whether the Agent process of a Session still runs.
-	Alive(ctx context.Context, p Process) (bool, error)
+	// Alive tells for each Process whether the Agent still runs; the answers
+	// are in the order of the processes. It takes all the Processes of a
+	// check at once so that a container Runtime can ask Docker once for all
+	// of them. A Process it cannot judge is ProcessUnknown, and err says why:
+	// the answers are valid whatever err is.
+	Alive(ctx context.Context, procs []Process) ([]Liveness, error)
 }

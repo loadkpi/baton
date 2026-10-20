@@ -428,7 +428,9 @@ func TestLs_ASessionStartedByHandShowsUpAfterSync(t *testing.T) {
 
 	rows := lsRows(t, env)
 
-	want := [][]string{{"my-app", "YYYY-MM-DD-1", "claude", "claude-personal", "host", "waiting_input"}}
+	// The stub has exited by now, and the Event names its process (the hook's
+	// ancestor called claude): the Session is lost, as a crashed Claude's would be.
+	want := [][]string{{"my-app", "YYYY-MM-DD-1", "claude", "claude-personal", "host", "lost"}}
 	if !reflect.DeepEqual(rows, want) {
 		t.Errorf("rows = %v, want %v", rows, want)
 	}

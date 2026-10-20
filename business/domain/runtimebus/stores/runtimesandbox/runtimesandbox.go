@@ -19,6 +19,7 @@ import (
 	"github.com/loadkpi/baton/business/types/profilename"
 	"github.com/loadkpi/baton/business/types/projectname"
 	"github.com/loadkpi/baton/business/types/runtime"
+	"github.com/loadkpi/baton/foundation/docker"
 )
 
 // The two Baton mounts of a sandbox container (DESIGN.md, D3), at the paths
@@ -45,13 +46,14 @@ type Runtime struct {
 	projects Projects
 	batonDir string
 	log      io.Writer
+	docker   runtimebus.Containers
 }
 
 // New creates the sandbox Runtime over the registered Projects. batonDir is the
 // Baton state directory (~/.baton), where it keeps the mounts of the
 // containers it started.
 func New(projects Projects, batonDir string) *Runtime {
-	return &Runtime{projects: projects, batonDir: batonDir, log: io.Discard}
+	return &Runtime{projects: projects, batonDir: batonDir, log: io.Discard, docker: docker.Client{}}
 }
 
 // WithLog sends what a start has to say to the user (a build of the image, the
@@ -120,9 +122,11 @@ func (r *Runtime) Targets(ctx context.Context, cfg configbus.Config) ([]syncbus.
 	return targets, warnings, nil
 }
 
-// Alive is filled in by ticket 11.
-func (*Runtime) Alive(context.Context, runtimebus.Process) (bool, error) {
-	return false, runtimebus.ErrNotImplemented
+// Alive asks Docker: a Process is gone with its container, or when its PID in
+// the container no longer runs or has another start time. The host name of its
+// Events is the container id, which is how the container is found.
+func (r *Runtime) Alive(ctx context.Context, procs []runtimebus.Process) ([]runtimebus.Liveness, error) {
+	return runtimebus.AliveInContainers(ctx, r.docker, procs)
 }
 
 // homeOf is the sandbox's home directory on the host: HOME inside the
