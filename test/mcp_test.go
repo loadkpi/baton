@@ -163,6 +163,7 @@ func manifestKeys(t *testing.T, env *batontest.Env, profile string) map[string]s
 		Keys []struct {
 			Path   string   `json:"path"`
 			Key    []string `json:"key"`
+			Item   string   `json:"item"`
 			SHA256 string   `json:"sha256"`
 		} `json:"keys"`
 	}
@@ -171,6 +172,9 @@ func manifestKeys(t *testing.T, env *batontest.Env, profile string) map[string]s
 	}
 	keys := make(map[string]string)
 	for _, k := range m.Keys {
+		if k.Item != "" {
+			continue // an entry of a shared array: a hook, see manifestHooks
+		}
 		keys[k.Path+" "+strings.Join(k.Key, ".")] = k.SHA256
 	}
 	return keys

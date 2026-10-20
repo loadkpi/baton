@@ -9,14 +9,11 @@ import (
 	"fmt"
 	"path/filepath"
 	"regexp"
-	"slices"
 	"sort"
 	"strings"
 
 	"github.com/loadkpi/baton/business/domain/configbus"
 	"github.com/loadkpi/baton/business/types/tag"
-	"github.com/loadkpi/baton/foundation/jsonkeys"
-	"github.com/loadkpi/baton/foundation/textdiff"
 )
 
 // mcpFile is the name of the file where a Claude Profile keeps its user-scope
@@ -162,152 +159,29 @@ func staleServers(previous Manifest, rel string, wanted mcpServers) []OwnedKey {
 }
 
 // planMCP plans the servers of the source in the Profile's MCP configuration.
-//
-// The file is shared: Claude and the user keep their own things in it, and
-// Baton owns the named keys under mcpServers that it recorded in the manifest.
-// A file that does not exist yet is nobody's, so it is created without a
-// question. Baton's keys are updated, added or removed without one while they
-// are still what Baton wrote; anything else is a question, which shows only
-// Baton's keys.
+// The file is shared and its rules are those of planJSONKeys; the keys are the
+// named servers under mcpServers.
 func (b *Bus) planMCP(ctx context.Context, plan *profilePlan, home string, previous Manifest, source Source, secrets Secrets) error {
 	wanted, err := serversFor(plan.profile, source, secrets)
 	if err != nil {
 		return err
 	}
 	rel := mcpRel(plan.profile.Dir, home)
-	stale := staleServers(previous, rel, wanted)
 
+	keys := make([]wantedKey, 0, len(wanted.names))
 	for _, name := range wanted.names {
-		plan.manifest.Keys = append(plan.manifest.Keys, OwnedKey{Path: rel, Key: []string{"mcpServers", name}, Sum: sumOfJSON(wanted.values[name])})
+		keys = append(keys, wantedKey{Key: []string{"mcpServers", name}, Value: wanted.values[name], Template: wanted.templates[name]})
 	}
-	plan.keysBefore = append(slices.Clone(plan.manifest.Keys), stale...)
-	if len(wanted.names) == 0 && len(stale) == 0 {
-		return nil
-	}
-
-	file, err := b.storer.QueryShared(ctx, plan.profile.Dir, rel)
-	if err != nil {
-		return err
-	}
-	if !file.Exists {
-		if len(wanted.names) == 0 {
-			return nil
-		}
-		data, err := json.MarshalIndent(map[string]any{"mcpServers": wanted.values}, "", "  ")
-		if err != nil {
-			return err
-		}
-		// 0600 because it holds secrets.
-		plan.shared = append(plan.shared, sharedChange{rel: rel, path: plan.abs(rel), data: append(data, '\n'), mode: 0o600})
-		return nil
-	}
-
-	// Secrets are never written into a file others can read, and a file Baton
-	// does not own is never chmod-ed: the user has to.
-	if wanted.hasSecrets && file.Mode.Perm()&0o077 != 0 {
-		return fmt.Errorf("%s is accessible by others (mode %04o) and would receive secrets; run: chmod 600 %s", file.Path, file.Mode.Perm(), file.Path)
-	}
-
-	edit, err := editServers(file, rel, previous, wanted, stale, secrets)
-	if err != nil {
-		return fmt.Errorf("%s: %w", file.Path, err)
-	}
-	plan.unchanged += edit.unchanged
-	if !edit.changed {
-		return nil
-	}
-	plan.shared = append(plan.shared, sharedChange{rel: rel, path: file.Path, data: edit.data, mode: file.Mode.Perm()})
-	if edit.needsAsk {
-		plan.asks = append(plan.asks, ask{
-			rel:  mcpFile, // names the backup, so it must stay inside the backup directory
-			path: file.Path,
-			question: Question{
-				Profile: plan.profile.Name.String(),
-				Path:    plan.abs(rel),
-				Diff:    edit.diff,
-			},
-		})
-	}
-	return nil
-}
-
-// serversEdit is the change to an existing MCP configuration.
-type serversEdit struct {
-	data      []byte
-	unchanged int
-	// needsAsk is set when a key that is changed was not written by Baton or
-	// was edited since.
-	needsAsk bool
-	// changed is set when the file differs from what it was.
-	changed bool
-	// diff shows Baton's keys before and after, with secrets hidden.
-	diff string
-}
-
-func editServers(file SharedFile, rel string, previous Manifest, wanted mcpServers, stale []OwnedKey, secrets Secrets) (serversEdit, error) {
-	// Every value of the secrets file is hidden in what is shown, not only those
-	// the Profile receives: a server that is gone from the source, or one edited
-	// by hand, may hold any of them.
-	hidden := secrets.Values
-
-	edit := serversEdit{data: file.Data}
-	var oldView, newView strings.Builder
-	var labels []string
-	show := func(label string, raw []byte, found bool, template any, after string) {
-		labels = append(labels, label)
-		if found {
-			fmt.Fprintf(&oldView, "%s = %s\n", label, hide(prettyJSON(compactJSON(coverSecrets(decodeJSON(raw), template))), hidden))
-		} else {
-			fmt.Fprintf(&oldView, "%s = (absent)\n", label)
-		}
-		fmt.Fprintf(&newView, "%s = %s\n", label, after)
-	}
-
-	for _, name := range wanted.names {
-		key := []string{"mcpServers", name}
-		raw, found, err := jsonkeys.Get(edit.data, key)
-		if err != nil {
-			return serversEdit{}, err
-		}
-		if found && sumOfRaw(raw) == sumOfJSON(wanted.values[name]) {
-			edit.unchanged++
-			continue
-		}
-		if recorded, owned := recordedKeySum(previous, rel, key); !owned || !found || sumOfRaw(raw) != recorded {
-			edit.needsAsk = true
-		}
-		show("mcpServers."+name, raw, found, wanted.templates[name], prettyJSON(compactJSON(wanted.templates[name])))
-		if edit.data, err = jsonkeys.Set(edit.data, key, compactJSON(wanted.values[name])); err != nil {
-			return serversEdit{}, err
-		}
-	}
-
-	for _, k := range stale {
-		raw, found, err := jsonkeys.Get(edit.data, k.Key)
-		if err != nil {
-			return serversEdit{}, err
-		}
-		if !found {
-			continue
-		}
-		if sumOfRaw(raw) != k.Sum {
-			edit.needsAsk = true
-		}
-		show("mcpServers."+k.Key[1], raw, found, nil, "(removed)")
-		if edit.data, err = jsonkeys.Delete(edit.data, k.Key); err != nil {
-			return serversEdit{}, err
-		}
-	}
-
-	edit.changed = len(labels) > 0
-	if edit.changed {
-		edit.diff = textdiff.Unified("a/"+mcpFile, "b/"+mcpFile, oldView.String(), newView.String())
-		if edit.diff == "" {
-			// What differs is hidden: only values where a secret goes.
-			edit.diff = "only secret values differ in " + strings.Join(labels, ", ") + "\n"
-		}
-	}
-	return edit, nil
+	return b.planJSONKeys(ctx, plan, previous, jsonTarget{
+		rel:        rel,
+		backupRel:  mcpFile, // must stay inside the backup directory
+		name:       mcpFile,
+		wanted:     keys,
+		stale:      staleServers(previous, rel, wanted),
+		mode:       0o600, // it holds secrets
+		hasSecrets: wanted.hasSecrets,
+		hidden:     secrets.Values,
+	})
 }
 
 // compactJSON is the canonical form of a JSON value: no white space, object
@@ -360,15 +234,6 @@ func hide(text string, secrets map[string]string) string {
 		text = strings.ReplaceAll(text, e.escaped, "${"+e.name+"}")
 	}
 	return text
-}
-
-func recordedKeySum(m Manifest, rel string, key []string) (string, bool) {
-	for _, k := range m.Keys {
-		if k.Path == rel && slices.Equal(k.Key, key) {
-			return k.Sum, true
-		}
-	}
-	return "", false
 }
 
 func decodeJSON(raw []byte) any {

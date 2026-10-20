@@ -69,6 +69,10 @@ type OwnedKey struct {
 	Path string
 	// Key leads from the top of the document to the key: ["mcpServers", "x"].
 	Key []string
+	// Item is set when Key leads to an array that is shared with the user and
+	// sync owns one element of it: the hook handler group whose command is
+	// Item (a Claude hook in settings.json).
+	Item string
 	// Sum is the SHA-256 (hex) of the canonical JSON of the value sync last
 	// wrote. A different value in the file means someone edited it by hand.
 	Sum string
@@ -166,6 +170,8 @@ type Storer interface {
 	// slash-separated), then the directories it leaves empty, but never the
 	// first path element ("skills"). A file that is already gone is fine.
 	RemoveFile(ctx context.Context, profileDir, rel string) error
+	// QueryExecutable reports whether path is a file somebody can execute.
+	QueryExecutable(ctx context.Context, path string) (bool, error)
 	// RemoveAll removes whatever is at rel inside a Profile directory: a
 	// directory with everything in it, or a symbolic link itself, never what
 	// it points to.
@@ -218,6 +224,9 @@ type ProfileResult struct {
 	Removed   int
 	Unchanged int
 	Backups   []Backup
+	// HooksFirst is set when this run gave the Profile Baton's status hooks
+	// for the first time. Sessions already running keep their old hooks.
+	HooksFirst bool
 }
 
 // Result is what one sync run did.
@@ -262,6 +271,10 @@ func (b *Bus) Sync(ctx context.Context, cfg configbus.Config) (Result, error) {
 		plans = append(plans, plan)
 	}
 
+	if err := b.warnAboutHookBinary(ctx, plans, cfg.Home, &res); err != nil {
+		return Result{}, err
+	}
+
 	if err := b.checkTracked(ctx, plans); err != nil {
 		return Result{}, err
 	}
@@ -275,7 +288,26 @@ func (b *Bus) Sync(ctx context.Context, cfg configbus.Config) (Result, error) {
 		if err != nil {
 			return Result{}, fmt.Errorf("profile %s: %w", plan.profile.Name, err)
 		}
+		pr.HooksFirst = plan.hooksFirst
 		res.Profiles = append(res.Profiles, pr)
 	}
 	return res, nil
+}
+
+// warnAboutHookBinary warns when the hooks that are installed call a binary
+// that is not there: every hook fails until it is. Sync still succeeds.
+func (b *Bus) warnAboutHookBinary(ctx context.Context, plans []profilePlan, home string, res *Result) error {
+	wanted := false
+	for _, plan := range plans {
+		wanted = wanted || plan.hooks
+	}
+	if !wanted {
+		return nil
+	}
+	ok, err := b.storer.QueryExecutable(ctx, hookBinary(home))
+	if err != nil || ok {
+		return err
+	}
+	res.Warnings = append(res.Warnings, fmt.Sprintf("the status hooks call %s, which is missing or not executable, so they fail until it is there; run `make install` in the Baton repository or copy the binary there", hookBinary(home)))
+	return nil
 }

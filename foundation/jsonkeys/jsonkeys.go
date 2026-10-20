@@ -1,6 +1,6 @@
-// Package jsonkeys changes named keys of a JSON document and leaves every
-// other byte of it as it was: the white space, the order of the keys, the
-// formatting of the values it does not touch.
+// Package jsonkeys changes named keys of a JSON document, and elements of the
+// arrays it holds, and leaves every other byte of it as it was: the white
+// space, the order of the keys, the formatting of the values it does not touch.
 package jsonkeys
 
 import (
@@ -18,6 +18,9 @@ type node struct {
 	// members are the members of an object; isObject tells it from other values.
 	isObject bool
 	members  []member
+	// elems are the elements of an array.
+	isArray bool
+	elems   []node
 }
 
 type member struct {
@@ -72,23 +75,23 @@ func (p *parser) parseValue() (node, error) {
 			n.members = append(n.members, member{key: key, keyStart: keyStart, keyEnd: keyEnd, value: value})
 		}
 	case '[':
-		depth := 0
+		n.isArray = true
+		p.pos++
 		for {
-			switch p.doc[p.pos] {
-			case '"':
-				if _, err := p.parseString(); err != nil {
-					return node{}, err
-				}
-				continue
-			case '[':
-				depth++
-			case ']':
-				depth--
-			}
-			p.pos++
-			if depth == 0 {
+			p.skipSpace()
+			if p.doc[p.pos] == ']' {
+				p.pos++
 				break
 			}
+			if p.doc[p.pos] == ',' {
+				p.pos++
+				continue
+			}
+			elem, err := p.parseValue()
+			if err != nil {
+				return node{}, err
+			}
+			n.elems = append(n.elems, elem)
 		}
 	case '"':
 		if _, err := p.parseString(); err != nil {
@@ -332,4 +335,138 @@ func find(obj node, key string) *member {
 		}
 	}
 	return nil
+}
+
+// array returns the array at path. found is false when the path is not there;
+// it is an error when a value is there that is not an array.
+func array(doc []byte, path []string) (root, arr node, found bool, err error) {
+	root, err = parse(doc)
+	if err != nil {
+		return node{}, node{}, false, err
+	}
+	cur := root
+	for i, key := range path {
+		next := find(cur, key)
+		if next == nil || !next.value.isObject && i < len(path)-1 {
+			return root, node{}, false, nil
+		}
+		cur = next.value
+	}
+	if !cur.isArray {
+		return node{}, node{}, false, fmt.Errorf("%q is not an array", strings.Join(path, "."))
+	}
+	return root, cur, true, nil
+}
+
+// Elements returns the elements of the array at path, exactly as the document
+// has them. A path that is not there has none.
+func Elements(doc []byte, path []string) (raws [][]byte, found bool, err error) {
+	_, arr, found, err := array(doc, path)
+	if err != nil || !found {
+		return nil, false, err
+	}
+	for _, e := range arr.elems {
+		raws = append(raws, doc[e.start:e.end])
+	}
+	return raws, true, nil
+}
+
+// multilineArray reports whether the elements of a non-empty array start on
+// lines of their own.
+func multilineArray(doc []byte, arr node) bool {
+	return bytes.Contains(doc[arr.start:arr.elems[0].start], []byte("\n"))
+}
+
+// SetElement replaces the element of the array at path with value (compact
+// JSON).
+func SetElement(doc []byte, path []string, index int, value []byte) ([]byte, error) {
+	_, arr, found, err := array(doc, path)
+	if err != nil {
+		return nil, err
+	}
+	if !found || index < 0 || index >= len(arr.elems) {
+		return nil, fmt.Errorf("%q has no element %d", strings.Join(path, "."), index)
+	}
+	elem := arr.elems[index]
+	if !multilineArray(doc, arr) {
+		return splice(doc, elem.start, elem.end, value), nil
+	}
+	indent := lineIndent(doc, elem.start)
+	unit := strings.TrimPrefix(indent, lineIndent(doc, arr.start))
+	var formatted bytes.Buffer
+	if err := json.Indent(&formatted, value, indent, unit); err != nil {
+		return nil, err
+	}
+	return splice(doc, elem.start, elem.end, formatted.Bytes()), nil
+}
+
+// AppendElement adds value (compact JSON) as the last element of the array at
+// path, written the way the array's other elements are. An array that is not
+// there is created, with the objects on the path.
+func AppendElement(doc []byte, path []string, value []byte) ([]byte, error) {
+	_, arr, found, err := array(doc, path)
+	if err != nil {
+		return nil, err
+	}
+	if !found {
+		return Set(doc, path, append(append([]byte("["), value...), ']'))
+	}
+
+	if len(arr.elems) == 0 {
+		// An empty array is opened up, one element per line.
+		outer := lineIndent(doc, arr.start)
+		indent := outer + docUnit(doc)
+		var formatted bytes.Buffer
+		if err := json.Indent(&formatted, value, indent, docUnit(doc)); err != nil {
+			return nil, err
+		}
+		var out bytes.Buffer
+		out.Write(doc[:arr.start+1])
+		out.WriteString("\n" + indent)
+		out.Write(formatted.Bytes())
+		out.WriteString("\n" + outer)
+		out.Write(doc[arr.end-1:])
+		return out.Bytes(), nil
+	}
+
+	last := arr.elems[len(arr.elems)-1]
+	if !multilineArray(doc, arr) {
+		// Written like the other elements; with only one, like the brackets.
+		sep := ","
+		if len(arr.elems) > 1 {
+			sep = string(doc[arr.elems[0].end:arr.elems[1].start])
+		} else if arr.elems[0].start > arr.start+1 {
+			sep = ", "
+		}
+		return splice(doc, last.end, last.end, append([]byte(sep), value...)), nil
+	}
+	indent := lineIndent(doc, last.start)
+	unit := strings.TrimPrefix(indent, lineIndent(doc, arr.start))
+	var formatted bytes.Buffer
+	if err := json.Indent(&formatted, value, indent, unit); err != nil {
+		return nil, err
+	}
+	return splice(doc, last.end, last.end, append([]byte(",\n"+indent), formatted.Bytes()...)), nil
+}
+
+// DeleteElement removes the element of the array at path together with the
+// comma that belongs to it. An array left without elements stays, as [].
+func DeleteElement(doc []byte, path []string, index int) ([]byte, error) {
+	_, arr, found, err := array(doc, path)
+	if err != nil {
+		return nil, err
+	}
+	if !found || index < 0 || index >= len(arr.elems) {
+		return doc, nil
+	}
+	var from, to int
+	switch {
+	case index > 0:
+		from, to = arr.elems[index-1].end, arr.elems[index].end
+	case len(arr.elems) > 1:
+		from, to = arr.elems[0].start, arr.elems[1].start
+	default:
+		from, to = arr.start+1, arr.end-1
+	}
+	return splice(doc, from, to, nil), nil
 }

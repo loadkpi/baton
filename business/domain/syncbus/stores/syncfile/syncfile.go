@@ -222,6 +222,7 @@ type fileManifest struct {
 type fileKey struct {
 	Path   string   `json:"path"`
 	Key    []string `json:"key"`
+	Item   string   `json:"item,omitempty"`
 	SHA256 string   `json:"sha256"`
 }
 
@@ -245,7 +246,7 @@ func toFileManifest(profile profilename.Name, m syncbus.Manifest) fileManifest {
 		fm.Blocks = append(fm.Blocks, fileBlock{Path: b.Path, SHA256: b.Sum})
 	}
 	for _, k := range m.Keys {
-		fm.Keys = append(fm.Keys, fileKey{Path: k.Path, Key: k.Key, SHA256: k.Sum})
+		fm.Keys = append(fm.Keys, fileKey{Path: k.Path, Key: k.Key, Item: k.Item, SHA256: k.Sum})
 	}
 	return fm
 }
@@ -473,7 +474,7 @@ func toBusManifest(fm fileManifest) (syncbus.Manifest, error) {
 		if k.Path != "../.claude.json" && (!filepath.IsLocal(k.Path) || path.Clean(k.Path) != k.Path) {
 			return syncbus.Manifest{}, fmt.Errorf("path %q is not a clean relative path inside the Profile", k.Path)
 		}
-		m.Keys = append(m.Keys, syncbus.OwnedKey{Path: k.Path, Key: k.Key, Sum: k.SHA256})
+		m.Keys = append(m.Keys, syncbus.OwnedKey{Path: k.Path, Key: k.Key, Item: k.Item, Sum: k.SHA256})
 	}
 	return m, nil
 }
@@ -501,4 +502,16 @@ func (s *Store) QueryManifest(_ context.Context, profile profilename.Name) (sync
 		return syncbus.Manifest{}, fmt.Errorf("%s: %w", s.manifestPath(profile), err)
 	}
 	return m, nil
+}
+
+// QueryExecutable reports whether path is a regular file with an execute bit.
+func (s *Store) QueryExecutable(_ context.Context, path string) (bool, error) {
+	info, err := os.Stat(path)
+	switch {
+	case os.IsNotExist(err):
+		return false, nil
+	case err != nil:
+		return false, err
+	}
+	return info.Mode().IsRegular() && info.Mode().Perm()&0o111 != 0, nil
 }

@@ -2,11 +2,17 @@
 
 export CGO_ENABLED = 0
 
-.PHONY: build test-only test lint fmt vet clean
+.PHONY: build install test-only test lint fmt vet clean
 
 # build compiles the single static baton binary into ./bin/baton.
 build:
 	go build -o bin/baton ./app/baton
+
+# install puts the binary where the status hooks written by `baton sync` call it
+# (~/.baton/bin/baton). It touches nothing else.
+install: build
+	install -d -m 0700 $(HOME)/.baton $(HOME)/.baton/bin
+	install -m 0755 bin/baton $(HOME)/.baton/bin/baton
 
 # test-only runs every test. The tests build the binary themselves.
 test-only:

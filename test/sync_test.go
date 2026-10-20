@@ -513,7 +513,7 @@ func TestSync_WritesUntrackedFilesInAProfileThatIsAGitRepository(t *testing.T) {
 	env.SourceFile("skills/greet/SKILL.md", "Hello.\n")
 	env.CommitSource("add skill")
 	profile := env.MakeProfileDir(".claude-personal")
-	env.WriteFile(filepath.Join(profile, "settings.json"), "{}\n")
+	env.WriteFile(filepath.Join(profile, "keybindings.json"), "{}\n")
 	gitInit(t, env, profile)
 	env.WriteConfig(standardConfig(env))
 
@@ -532,7 +532,7 @@ func TestSync_NeverTouchesWhatIsNotInTheManifest(t *testing.T) {
 	env.SourceFile("skills/greet/SKILL.md", "Hello.\n")
 	env.CommitSource("add skill")
 	profile := env.MakeProfileDir(".claude-personal")
-	env.WriteFile(filepath.Join(profile, "settings.json"), `{"theme": "dark"}`+"\n")
+	env.WriteFile(filepath.Join(profile, "keybindings.json"), `{"theme": "dark"}`+"\n")
 	env.WriteFile(filepath.Join(profile, "skills/third-party/SKILL.md"), "Installed by someone else.\n")
 	env.WriteConfig(standardConfig(env))
 	if res := env.Run("sync"); res.ExitCode != 0 {
@@ -542,7 +542,7 @@ func TestSync_NeverTouchesWhatIsNotInTheManifest(t *testing.T) {
 	mine := filepath.Join(profile, "skills/greet/mine.txt")
 	env.WriteFile(mine, "my own file\n")
 	untouched := []string{
-		filepath.Join(profile, "settings.json"),
+		filepath.Join(profile, "keybindings.json"),
 		filepath.Join(profile, "skills/third-party/SKILL.md"),
 		mine,
 	}

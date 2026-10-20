@@ -128,3 +128,26 @@ func cleanEnv() []string {
 	}
 	return env
 }
+
+// TopLevel returns the root of the work tree that contains dir. ok is false
+// when dir is not inside a work tree, or does not exist.
+func TopLevel(ctx context.Context, dir string) (root string, ok bool, err error) {
+	if info, statErr := os.Stat(dir); statErr != nil || !info.IsDir() {
+		return "", false, nil
+	}
+	cmd := exec.CommandContext(ctx, "git", "-C", dir, "rev-parse", "--show-toplevel")
+	cmd.Env = cleanEnv()
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	if err := cmd.Run(); err != nil {
+		switch {
+		case errors.Is(err, exec.ErrNotFound):
+			return "", false, fmt.Errorf("git is needed to find the Project of %s: %w", dir, err)
+		case strings.Contains(stderr.String(), "not a git repository"):
+			return "", false, nil
+		default:
+			return "", false, fmt.Errorf("git rev-parse in %s: %w: %s", dir, err, strings.TrimSpace(stderr.String()))
+		}
+	}
+	return strings.TrimRight(stdout.String(), "\n"), true, nil
+}

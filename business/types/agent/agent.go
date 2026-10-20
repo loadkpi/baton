@@ -25,3 +25,9 @@ func Parse(s string) (Agent, error) {
 func (a Agent) String() string {
 	return a.name
 }
+
+// Binary is the name of the Agent's executable, which is also the name the
+// kernel keeps for its process.
+func (a Agent) Binary() string {
+	return a.name
+}

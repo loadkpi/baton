@@ -42,6 +42,9 @@ func toAppSyncLines(res syncbus.Result) []string {
 			lines = append(lines, fmt.Sprintf("%s: backed up %s to %s", p.Name, b.Path, b.Copy))
 		}
 		lines = append(lines, fmt.Sprintf("%s: %d files written, %d removed, %d unchanged", p.Name, p.Written, p.Removed, p.Unchanged))
+		if p.HooksFirst {
+			lines = append(lines, fmt.Sprintf("%s: status hooks installed; Sessions of this Profile that are already running keep their old hooks and must be restarted to report Events", p.Name))
+		}
 	}
 	return lines
 }

@@ -4,13 +4,15 @@
 
 **Blocked by:** 02
 
-**Status:** ready-for-agent
+**Status:** done (live recording pending)
 
-- [ ] `baton sync` adds status hooks to `settings.json` of every host Claude Profile through the shared-file flow from 02 and the JSON key ownership from 04, for the Events in the status table; each hook calls `baton hook claude --profile <name> --runtime host`.
-- [ ] `baton hook <agent>` reads the payload from stdin and appends exactly one line to `~/.baton/sessions/<agent>-<session_id>.jsonl` under a file lock, with `v`, `ts`, `agent`, `profile`, `runtime`, `host`, `agent_pid`, `agent_start`, `session_id`, `event`, `cwd` and the raw `payload`. Concurrent hooks with payloads larger than the atomic append size never interleave.
-- [ ] The hook does not call git, look up Projects or interpret the payload.
+- [x] `baton sync` adds status hooks to `settings.json` of every host Claude Profile through the shared-file flow from 02 and the JSON key ownership from 04, for the Events in the status table; each hook calls `baton hook claude --profile <name> --runtime host`.
+- [x] `baton hook <agent>` reads the payload from stdin and appends exactly one line to `~/.baton/sessions/<agent>-<session_id>.jsonl` under a file lock, with `v`, `ts`, `agent`, `profile`, `runtime`, `host`, `agent_pid`, `agent_start`, `session_id`, `event`, `cwd` and the raw `payload`. Concurrent hooks with payloads larger than the atomic append size never interleave.
+- [x] The hook does not call git, look up Projects or interpret the payload.
 - [ ] `agent_pid` is the Agent's process, not a shell between it and the hook. Check the parent chain under a live Claude first and record what was found in `DESIGN.md`. `agent_start` is that process's start time from `/proc/<pid>/stat`.
-- [ ] Event files are readable only by me.
-- [ ] Readers, not the hook, register an unknown Project by the git root of the Session's `cwd`, under a lock, with the default Runtime `sandbox` if it has `.ai-sandbox/run.sh` and `host` otherwise; a name clash gets a suffix. A Session outside git shows Project `-`.
-- [ ] `baton ls` shows Project, Agent, Profile, Runtime and status for every Session, with statuses derived from the last Event per the Claude Code column of the status table (`running`, `waiting_approval`, `waiting_input`, `ended`).
+  - Not satisfied yet: no live Claude was run. `baton hook` walks up to the nearest ancestor named `claude` (max 8 steps) and falls back to the direct parent with `agent_pid_fallback`; the finding is `[unverified]` in `DESIGN.md` until the chain is recorded under a live Claude.
+- [x] Event files are readable only by me.
+- [x] Readers, not the hook, register an unknown Project by the git root of the Session's `cwd`, under a lock, with the default Runtime `sandbox` if it has `.ai-sandbox/run.sh` and `host` otherwise; a name clash gets a suffix. A Session outside git shows Project `-`.
+- [x] `baton ls` shows Project, Agent, Profile, Runtime and status for every Session, with statuses derived from the last Event per the Claude Code column of the status table (`running`, `waiting_approval`, `waiting_input`, `ended`).
 - [ ] Tested with recorded real Claude Code hook payloads as fixtures.
+  - Not satisfied yet: the fixtures in `test/testdata/claude-hooks/` are copied from the hooks documentation and labelled "from docs, replace with recordings".

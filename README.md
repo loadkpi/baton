@@ -11,7 +11,7 @@ Baton never replaces the Agents and never touches their tokens: it runs the vend
 
 ## Status
 
-Work in progress; v1 is being built ticket by ticket. Today only part of `baton sync` works: skills, the instructions block in `CLAUDE.md` and MCP servers (with secrets from a local file) for host Claude Profiles, filtered by tags (work content goes only to the Profiles that accept it), with an owned-files manifest, a diff-and-confirm step and backups before Baton changes anything it did not create. MCP servers go to the Profile's `.claude.json` (`~/.claude.json` for the default `~/.claude` Profile, `<dir>/.claude.json` for the others). Sync refuses to put secrets into a file others can read. Everything else above is designed but not built yet.
+Work in progress; v1 is being built ticket by ticket. Today part of `baton sync` and a first `baton ls` work. `baton sync` handles skills, the instructions block in `CLAUDE.md`, MCP servers (with secrets from a local file) and Baton's status hooks in `settings.json` for host Claude Profiles, filtered by tags (work content goes only to the Profiles that accept it), with an owned-files manifest, a diff-and-confirm step and backups before Baton changes anything it did not create. MCP servers go to the Profile's `.claude.json` (`~/.claude.json` for the default `~/.claude` Profile, `<dir>/.claude.json` for the others). Sync refuses to put secrets into a file others can read. The status hooks call `~/.baton/bin/baton`, which `make install` puts there. After that, a Claude started by hand under any synced Profile (Sessions that were already running keep their old hooks) shows up in `baton ls` with its Project, Agent, Profile, Runtime and status (`running`, `waiting_approval`, `waiting_input` or `ended`); Projects register themselves from the git root of the Session's directory. This part is tested with payloads copied from the documentation and with stubs, not yet under a live Claude Code. `lost`, `baton new`, `baton watch`, `baton handoff`, Codex, sandboxes and Compose are designed but not built yet.
 
 ## Build and test
 
@@ -20,6 +20,7 @@ Requires Go 1.24 and Linux.
 ```sh
 make build      # static binary at bin/baton
 make test       # tests, then golangci-lint
+make install    # copy the binary to ~/.baton/bin/baton, where the status hooks call it
 ```
 
 The tests run the built `baton` as a subprocess against a temporary `HOME`, with `guake`, `docker`, `notify-send`, `claude` and `codex` replaced by recording stubs. They never touch your real Profiles.

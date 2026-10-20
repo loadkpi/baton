@@ -35,6 +35,10 @@ type profilePlan struct {
 	shared []sharedChange
 	// asks are the things sync does not own and wants to change.
 	asks []ask
+	// hooks is set when the Profile gets Baton's status hooks; hooksFirst
+	// when it had none before.
+	hooks      bool
+	hooksFirst bool
 }
 
 // sharedChange is the change to the Baton block of one shared file.
@@ -109,6 +113,9 @@ func (b *Bus) plan(ctx context.Context, p configbus.Profile, home string, source
 		return profilePlan{}, err
 	}
 	if err := b.planMCP(ctx, &plan, home, previous, source, secrets); err != nil {
+		return profilePlan{}, err
+	}
+	if err := b.planHooks(ctx, &plan, home, previous); err != nil {
 		return profilePlan{}, err
 	}
 	return plan, nil

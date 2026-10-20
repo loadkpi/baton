@@ -51,7 +51,7 @@ func (c console) usagef(format string, a ...any) int {
 func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	c := console{stdin: stdin, stdout: stdout, stderr: stderr}
 	if len(args) == 0 {
-		return c.usagef("a command is required (available: sync)")
+		return c.usagef("a command is required (available: sync, hook, ls)")
 	}
 
 	home, err := os.UserHomeDir()
@@ -62,7 +62,11 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 	switch args[0] {
 	case "sync":
 		return runSync(ctx, c, home)
+	case "hook":
+		return runHook(ctx, c, home, args[1:])
+	case "ls":
+		return runLs(ctx, c, home, args[1:])
 	default:
-		return c.usagef("unknown command %q (available: sync)", args[0])
+		return c.usagef("unknown command %q (available: sync, hook, ls)", args[0])
 	}
 }
