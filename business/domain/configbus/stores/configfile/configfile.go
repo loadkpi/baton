@@ -14,6 +14,7 @@ import (
 	"github.com/loadkpi/baton/business/domain/configbus"
 	"github.com/loadkpi/baton/business/types/agent"
 	"github.com/loadkpi/baton/business/types/profilename"
+	"github.com/loadkpi/baton/business/types/tag"
 )
 
 // Store reads the configuration file at a path.
@@ -35,8 +36,9 @@ type fileConfig struct {
 }
 
 type fileProfile struct {
-	Agent string `toml:"agent"`
-	Dir   string `toml:"dir"`
+	Agent string   `toml:"agent"`
+	Dir   string   `toml:"dir"`
+	Tags  []string `toml:"tags"`
 }
 
 // Query reads and validates the configuration file.
@@ -108,7 +110,11 @@ func toBusProfile(name string, fp fileProfile, home string) (configbus.Profile, 
 	if !filepath.IsAbs(dir) {
 		return configbus.Profile{}, fmt.Errorf("profile %s: dir %q must be an absolute path (or start with ~)", name, fp.Dir)
 	}
-	return configbus.Profile{Name: pn, Agent: a, Dir: dir}, nil
+	tags, err := tag.ParseAll(fp.Tags)
+	if err != nil {
+		return configbus.Profile{}, fmt.Errorf("profile %s: tags: %w", name, err)
+	}
+	return configbus.Profile{Name: pn, Agent: a, Dir: dir, Tags: tags}, nil
 }
 
 // expandHome replaces a leading "~" or "~/" with the home directory.

@@ -11,7 +11,7 @@ Baton never replaces the Agents and never touches their tokens: it runs the vend
 
 ## Status
 
-Work in progress; v1 is being built ticket by ticket. Today only part of `baton sync` works: skills and the instructions block in `CLAUDE.md` for host Claude Profiles, with an owned-files manifest, a diff-and-confirm step and backups before Baton changes anything it did not create. Everything else above is designed but not built yet.
+Work in progress; v1 is being built ticket by ticket. Today only part of `baton sync` works: skills and the instructions block in `CLAUDE.md` for host Claude Profiles, filtered by tags (work content goes only to the Profiles that accept it), with an owned-files manifest, a diff-and-confirm step and backups before Baton changes anything it did not create. Everything else above is designed but not built yet.
 
 ## Build and test
 
@@ -34,9 +34,10 @@ source = "~/path/to/your/agent-config"   # private git repository with skills/ a
 [profiles.claude-personal]
 agent = "claude"
 dir   = "~/.claude-personal"
+tags  = ["personal"]                     # optional: tags this Profile accepts
 ```
 
-The source repository holds `skills/<name>/SKILL.md` (plus any supporting files) and `AGENTS.md` with instructions. Baton records what it wrote in `~/.baton/manifests/<profile>.json` and only ever updates or deletes those files. See [DESIGN.md](DESIGN.md#config-source-and-manifest-formats) for the formats.
+The source repository holds `skills/<name>/SKILL.md` (plus any supporting files) and `AGENTS.md` with instructions. A skill is tagged with `tags: [work]` in its front matter, a part of `AGENTS.md` by wrapping it in `<!-- baton:tags work -->` and `<!-- /baton:tags -->` lines. Untagged items go to every Profile; a tagged one only to Profiles that accept at least one of its tags. Baton records what it wrote in `~/.baton/manifests/<profile>.json` and only ever updates or deletes those files. See [DESIGN.md](DESIGN.md#config-source-and-manifest-formats) for the formats.
 
 ## Documentation
 

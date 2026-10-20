@@ -196,20 +196,22 @@ source = "~/github/my/agent-config"     # the private source repository
 [profiles.claude-personal]              # the table key is the Profile name
 agent = "claude"                        # the only supported value in v1 for host Profiles
 dir   = "~/.claude-personal"            # the Agent's config directory
+tags  = ["personal"]                    # optional: the tags this Profile accepts (ticket 03)
 ```
 
 - `source`, `agent` and `dir` are required. Paths are absolute or start with `~/`; anything else is an error. At least one Profile is required.
 - A Profile name matches `[a-z0-9][a-z0-9._-]*`, because Baton uses it as a file name (manifests, backups).
 - Unknown keys are errors, so a misspelled key is never silently ignored.
 - A missing or invalid config stops `baton` with `baton: <path>: <reason>` on stderr and exit code 1. Usage errors exit with 2.
-- Growth: per-Profile `tags` (ticket 03) goes into the same table; other settings (Telegram, ...) get their own top-level tables. Sandbox Profiles are not listed here, they are derived from the registered Projects. Secrets stay out of this file (`secrets.env`).
+- `tags` is an optional list of tags (below). Without it, or empty, the Profile accepts only untagged items. A tag matches `[a-z0-9][a-z0-9._-]*`; anything else is an error naming the Profile. The same `tags` key is what every other kind of Profile entry uses later (sandbox defaults in ticket 08, Profiles inside a Compose container in ticket 16), because tags are matched on the host while sync plans a Profile and never depend on where the Profile lives.
+- Growth: other settings (Telegram, ...) get their own top-level tables. Sandbox Profiles are not listed here, they are derived from the registered Projects. Secrets stay out of this file (`secrets.env`).
 
 **Source repository layout.** The source is read from its working tree, not from git history: uncommitted edits sync too, and sync runs no git commands on it.
 
 ```
 <source>/
   skills/<name>/SKILL.md      # a skill is a directory with SKILL.md; any other files travel with it
-  AGENTS.md                   # instructions: Baton's block in CLAUDE.md (ticket 02 built the block, ticket 03 adds tags)
+  AGENTS.md                   # instructions: Baton's block in CLAUDE.md; parts can carry tags (below)
   ...                         # MCP manifest (ticket 04): name and format chosen there
 ```
 
@@ -217,7 +219,22 @@ dir   = "~/.claude-personal"            # the Agent's config directory
 - Entries starting with `.` and plain files directly under `skills/` are ignored. A directory without `SKILL.md` is not a skill: it is skipped with a warning on stderr.
 - File modes are normalized to `0755` (owner-executable in the source) or `0644`, so results do not depend on the umask of the checkout. Symbolic links and special files inside a skill are an error.
 - A source without `skills/` has no skills; a `source` that is not a directory is an error.
-- Where item tags live (frontmatter or a sidecar file) is decided in ticket 03. Whatever it picks must not change how untagged items are copied.
+
+**Tags** (ticket 03). Tags sit inside the items, not in a second file, so an item and its tags cannot drift apart and a skill is still copied verbatim.
+
+- *Skills.* A top-level key `tags` in the YAML front matter of `SKILL.md`: `tags: [work, personal]`, a single value `tags: work`, or a block list (`tags:` and `- work` lines). Front matter is read only when `---` is the first line, as Claude Code does. No second YAML dependency: sync reads just this one key, only at column 0, so text inside a multi-line value is never taken for it. An empty list, an invalid tag, an unclosed front matter or a repeated key stops sync with an error naming the skill, because a skill whose tags cannot be read must not be sent anywhere. The key stays in the copied `SKILL.md`. Claude Code ignores front matter fields it does not know ([Claude Code: Skills](https://code.claude.com/docs/en/skills), checked Oct 20, 2026); whether Codex does is [unverified].
+- *Instructions.* `AGENTS.md` is one file, so tags wrap parts of it in two whole lines that are HTML comments (invisible when rendered, and a plain `AGENTS.md` stays valid for anything else that reads it):
+
+  ```markdown
+  <!-- baton:tags work, family -->
+  ...for Profiles that accept work or family...
+  <!-- /baton:tags -->
+  ```
+
+  Text outside any part is untagged. Parts do not nest; an unclosed or unmatched marker, a part without tags or an invalid tag stops sync with an error naming `AGENTS.md` and the line. Each Profile gets the file with the parts it does not accept cut out and the marker lines of the parts it accepts removed; when a cut-out part sits between two blank lines, one of them goes too. If nothing is left, the Profile has no block (an existing one is removed by the usual rules). Untagged text is copied byte for byte. The tag markers are never written into a Profile, so `<!-- baton:begin -->` blocks and their checksums are those of the rendered text.
+- *Matching.* An item reaches a Profile when it has no tags, or at least one of its tags is among the Profile's `tags`. Tags are plain words with no hierarchy or negation.
+- *Changing tags* needs no special case: an item a Profile no longer accepts is just a file the source no longer wants for it. Owned files are removed through the manifest, and the block is updated or removed under the rules of ticket 02 (silently while its body is unchanged). Foreign files and hand-edited blocks are never touched without a question.
+- *Containers.* Filtering happens on the host while a Profile is planned, from the Profile's own `tags`, and only the filtered result is written. A Profile inside a container (tickets 08 and 16) therefore needs nothing but its `tags` in the config.
 
 **Manifest: `~/.baton/manifests/<profile>.json`**, one per Profile, mode 0600, written atomically (temp file and rename), and not rewritten when nothing changed.
 
@@ -241,7 +258,7 @@ dir   = "~/.claude-personal"            # the Agent's config directory
 
 - *What counts as "not owned".* A skill directory (or file, or symbolic link) at `skills/<name>` when the manifest has no file under it; a file at a path the source skill wants when the manifest does not list it (inside a skill that is otherwise owned); the instructions file when it exists and has no Baton block, or when the block was edited. A file that does not exist yet is nobody's: it is created without a question.
 - *Foreign skill directory.* It is replaced as a whole, not merged: the directory is copied to the backup, removed, and the source skill written. A symbolic link at the skill's path (third-party installers link skills in) is replaced by a real directory; the link is backed up as a link and its target is never touched or followed.
-- *Instructions block (the Markdown mechanism).* The source `AGENTS.md` is rendered as the block `<!-- baton:begin -->` / `<!-- baton:end -->` in `CLAUDE.md` of every host Claude Profile, untagged for now (tags are ticket 03). A marker counts only as a whole line. The block is appended after one blank line; when the block is later removed the blank line goes too, so a file that got a block and lost it is byte-for-byte what it was (a file that did not end with a newline gets one). A file whose markers do not form exactly one block (a lone marker, two blocks, end before begin) stops sync with an error naming the file: nothing can be said about which part is whose. `AGENTS.md` itself must not contain a marker line.
+- *Instructions block (the Markdown mechanism).* The source `AGENTS.md` is rendered as the block `<!-- baton:begin -->` / `<!-- baton:end -->` in `CLAUDE.md` of every host Claude Profile (filtered by the Profile's tags, see above). A marker counts only as a whole line. The block is appended after one blank line; when the block is later removed the blank line goes too, so a file that got a block and lost it is byte-for-byte what it was (a file that did not end with a newline gets one). A file whose markers do not form exactly one block (a lone marker, two blocks, end before begin) stops sync with an error naming the file: nothing can be said about which part is whose. `AGENTS.md` itself must not contain a marker line.
 - *Manifest `blocks`.* `{ "path": "CLAUDE.md", "sha256": "<hex>" }` per owned block: the checksum of the body between the markers as sync last wrote it. A body with a different checksum was edited by hand, so the next sync asks again, and so does one where the block was cut out of the file. The array is omitted when empty; `version` stays 1.
 - *Updates without a question.* The block is updated or removed silently when the file still has it and its body matches the recorded checksum. An `AGENTS.md` removed from the source takes the block out; a file that is empty afterwards (sync created it) is deleted.
 - *Symbolic links.* If a shared file is a symbolic link, sync reads and changes the file behind it and keeps the link; the git check and the backup use the file behind the link too. An empty result is written, not deleted.

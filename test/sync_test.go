@@ -1017,3 +1017,397 @@ func TestSync_QuestionShowsAUnifiedDiffWithContext(t *testing.T) {
 		t.Errorf("transcript lacks the diff %q:\n%s", want, res.Stdout)
 	}
 }
+
+// twoProfilesConfig configures a personal and a work host Claude Profile with
+// the tags each accepts (a TOML array literal such as `["work"]`, or "" for
+// none).
+func twoProfilesConfig(env *batontest.Env, personalTags, workTags string) string {
+	tagsLine := func(tags string) string {
+		if tags == "" {
+			return ""
+		}
+		return "tags = " + tags + "\n"
+	}
+	return `source = "` + env.SourceDir + `"
+
+[profiles.claude-personal]
+agent = "claude"
+dir = "` + env.Path(".claude-personal") + `"
+` + tagsLine(personalTags) + `
+[profiles.claude-work]
+agent = "claude"
+dir = "` + env.Path(".claude-work") + `"
+` + tagsLine(workTags)
+}
+
+func TestSync_ATaggedSkillReachesOnlyProfilesThatAcceptItsTag(t *testing.T) {
+	env := newEnv(t)
+	env.SourceFile("skills/common/SKILL.md", "---\nname: common\n---\nFor everyone.\n")
+	env.SourceFile("skills/deploy/SKILL.md", "---\nname: deploy\ntags: [work]\n---\nWork only.\n")
+	env.SourceFile("skills/deploy/scripts/run.sh", "echo deploy\n", true)
+	env.SourceFile("skills/journal/SKILL.md", "---\nname: journal\ntags: [personal]\n---\nPersonal only.\n")
+	env.CommitSource("add skills")
+	personal := env.MakeProfileDir(".claude-personal")
+	work := env.MakeProfileDir(".claude-work")
+	env.WriteConfig(twoProfilesConfig(env, `["personal"]`, `["work"]`))
+
+	res := env.Run("sync")
+
+	if res.ExitCode != 0 {
+		t.Fatalf("exit code = %d, stderr=%q", res.ExitCode, res.Stderr)
+	}
+	for _, c := range []struct {
+		profile string
+		rel     string
+		want    bool
+	}{
+		{personal, "skills/common/SKILL.md", true},
+		{work, "skills/common/SKILL.md", true},
+		{work, "skills/deploy/SKILL.md", true},
+		{work, "skills/deploy/scripts/run.sh", true},
+		{personal, "skills/deploy", false},
+		{personal, "skills/journal/SKILL.md", true},
+		{work, "skills/journal", false},
+	} {
+		if got := env.Exists(filepath.Join(c.profile, c.rel)); got != c.want {
+			t.Errorf("%s exists in %s = %v, want %v", c.rel, c.profile, got, c.want)
+		}
+	}
+	if got, want := manifestPaths(t, env, "claude-personal"), []string{"skills/common/SKILL.md", "skills/journal/SKILL.md"}; !slices.Equal(got, want) {
+		t.Errorf("personal manifest files = %v, want %v", got, want)
+	}
+}
+
+func TestSync_ChangingAProfilesTagsRemovesWhatItNoLongerAcceptsAndOnlyThat(t *testing.T) {
+	env := newEnv(t)
+	env.SourceFile("skills/common/SKILL.md", "For everyone.\n")
+	env.SourceFile("skills/deploy/SKILL.md", "---\ntags: [work]\n---\nWork only.\n")
+	env.SourceFile("skills/deploy/scripts/run.sh", "echo deploy\n", true)
+	env.CommitSource("add skills")
+	env.MakeProfileDir(".claude-personal")
+	work := env.MakeProfileDir(".claude-work")
+	env.WriteFile(filepath.Join(work, "skills/theirs/SKILL.md"), "Not Baton's.\n")
+	env.WriteConfig(twoProfilesConfig(env, "", `["work"]`))
+	if res := env.Run("sync"); res.ExitCode != 0 {
+		t.Fatalf("first sync: exit code = %d, stderr=%q", res.ExitCode, res.Stderr)
+	}
+	if !env.Exists(filepath.Join(work, "skills/deploy/SKILL.md")) {
+		t.Fatal("setup: the work Profile did not get the deploy skill")
+	}
+
+	env.WriteConfig(twoProfilesConfig(env, "", `["personal"]`))
+	res := env.Run("sync") // no terminal: removing what Baton owns needs no question
+
+	if res.ExitCode != 0 {
+		t.Fatalf("second sync: exit code = %d, stderr=%q", res.ExitCode, res.Stderr)
+	}
+	if env.Exists(filepath.Join(work, "skills/deploy")) {
+		t.Error("skills/deploy is still in the work Profile after it stopped accepting work")
+	}
+	if got := env.ReadFile(filepath.Join(work, "skills/common/SKILL.md")); got != "For everyone.\n" {
+		t.Errorf("common/SKILL.md = %q, want it kept", got)
+	}
+	if got := env.ReadFile(filepath.Join(work, "skills/theirs/SKILL.md")); got != "Not Baton's.\n" {
+		t.Errorf("foreign skill = %q, want it untouched", got)
+	}
+	if got, want := manifestPaths(t, env, "claude-work"), []string{"skills/common/SKILL.md"}; !slices.Equal(got, want) {
+		t.Errorf("manifest files = %v, want %v", got, want)
+	}
+
+	env.WriteConfig(twoProfilesConfig(env, "", `["work", "personal"]`))
+	if res := env.Run("sync"); res.ExitCode != 0 {
+		t.Fatalf("third sync: exit code = %d, stderr=%q", res.ExitCode, res.Stderr)
+	}
+	if got := env.ReadFile(filepath.Join(work, "skills/deploy/SKILL.md")); got != "---\ntags: [work]\n---\nWork only.\n" {
+		t.Errorf("deploy/SKILL.md = %q, want it back once work is accepted again", got)
+	}
+}
+
+func TestSync_TagsInTheFrontMatterCanBeAScalarOrABlockList(t *testing.T) {
+	env := newEnv(t)
+	env.SourceFile("skills/one/SKILL.md", "---\nname: one\ndescription: >\n  tags: personal\ntags: work   # only here\n---\nOne.\n")
+	env.SourceFile("skills/two/SKILL.md", "---\ntags:\n  - 'personal'\n  - \"other\"\nname: two\n---\nTwo.\n")
+	env.SourceFile("skills/three/SKILL.md", "---\r\ntags: [work]\r\n---\r\nThree.\r\n")
+	env.CommitSource("add skills")
+	personal := env.MakeProfileDir(".claude-personal")
+	work := env.MakeProfileDir(".claude-work")
+	env.WriteConfig(twoProfilesConfig(env, `["personal"]`, `["work"]`))
+
+	res := env.Run("sync")
+
+	if res.ExitCode != 0 {
+		t.Fatalf("exit code = %d, stderr=%q", res.ExitCode, res.Stderr)
+	}
+	for _, c := range []struct {
+		profile, skill string
+		want           bool
+	}{
+		{work, "one", true}, {personal, "one", false},
+		{personal, "two", true}, {work, "two", false},
+		{work, "three", true}, {personal, "three", false},
+	} {
+		if got := env.Exists(filepath.Join(c.profile, "skills", c.skill)); got != c.want {
+			t.Errorf("skill %s in %s = %v, want %v", c.skill, c.profile, got, c.want)
+		}
+	}
+}
+
+func TestSync_AProfileWithoutTagsGetsOnlyUntaggedSkills(t *testing.T) {
+	env := newEnv(t)
+	env.SourceFile("skills/common/SKILL.md", "---\nname: common\n---\nFor everyone.\n")
+	env.SourceFile("skills/deploy/SKILL.md", "---\ntags: [work]\n---\nWork only.\n")
+	env.CommitSource("add skills")
+	profile := env.MakeProfileDir(".claude-personal")
+	env.WriteConfig(standardConfig(env))
+
+	res := env.Run("sync")
+
+	if res.ExitCode != 0 {
+		t.Fatalf("exit code = %d, stderr=%q", res.ExitCode, res.Stderr)
+	}
+	if !env.Exists(filepath.Join(profile, "skills/common/SKILL.md")) {
+		t.Error("the untagged skill did not reach a Profile that accepts no tags")
+	}
+	if env.Exists(filepath.Join(profile, "skills/deploy")) {
+		t.Error("a work skill reached a Profile that accepts no tags")
+	}
+}
+
+func TestSync_UnreadableTagsStopSyncBeforeAnythingIsWritten(t *testing.T) {
+	cases := []struct {
+		name, skillMd, wantErr string
+	}{
+		{"invalid tag", "---\ntags: [Work]\n---\nx\n", "invalid tag \"Work\""},
+		{"empty list", "---\ntags: []\n---\nx\n", "list is empty"},
+		{"front matter not closed", "---\ntags: [work]\nx\n", "not closed"},
+		{"tags twice", "---\ntags: [work]\ntags: [personal]\n---\nx\n", "twice"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			env := newEnv(t)
+			env.SourceFile("skills/common/SKILL.md", "For everyone.\n")
+			env.SourceFile("skills/bad/SKILL.md", tc.skillMd)
+			env.CommitSource("add skills")
+			profile := env.MakeProfileDir(".claude-personal")
+			env.WriteConfig(standardConfig(env))
+
+			res := env.Run("sync")
+
+			if res.ExitCode == 0 {
+				t.Fatalf("exit code = 0, want non-zero; stdout=%q", res.Stdout)
+			}
+			for _, want := range []string{"skills/bad/SKILL.md", tc.wantErr} {
+				if !strings.Contains(res.Stderr, want) {
+					t.Errorf("stderr = %q, want it to contain %q", res.Stderr, want)
+				}
+			}
+			if env.Exists(filepath.Join(profile, "skills")) {
+				t.Error("sync wrote skills although a skill's tags could not be read")
+			}
+		})
+	}
+}
+
+func TestSync_InvalidProfileTagsFailClearly(t *testing.T) {
+	env := newEnv(t)
+	env.SourceFile("skills/common/SKILL.md", "For everyone.\n")
+	env.CommitSource("add skill")
+	env.MakeProfileDir(".claude-personal")
+	env.WriteConfig(standardConfig(env) + "tags = [\"Work!\"]\n")
+
+	res := env.Run("sync")
+
+	if res.ExitCode == 0 {
+		t.Fatalf("exit code = 0, want non-zero; stdout=%q", res.Stdout)
+	}
+	if !strings.Contains(res.Stderr, "claude-personal") || !strings.Contains(res.Stderr, "Work!") {
+		t.Errorf("stderr = %q, want it to name the Profile and the tag", res.Stderr)
+	}
+}
+
+// taggedAgents is an AGENTS.md with a part for everyone and parts for one tag.
+const taggedAgents = `# Rules
+
+Be kind.
+
+<!-- baton:tags work -->
+## Work
+
+Use the ticket tracker.
+
+<!-- /baton:tags -->
+<!-- baton:tags personal, family -->
+## Home
+
+Keep it short.
+<!-- /baton:tags -->
+
+Be brief.
+`
+
+func TestSync_TaggedPartsOfTheInstructionsReachOnlyProfilesThatAcceptThem(t *testing.T) {
+	env := newEnv(t)
+	env.SourceFile("AGENTS.md", taggedAgents)
+	env.SourceFile("skills/greet/SKILL.md", "Hello.\n")
+	env.CommitSource("add instructions")
+	personal := env.MakeProfileDir(".claude-personal")
+	work := env.MakeProfileDir(".claude-work")
+	env.WriteConfig(twoProfilesConfig(env, `["family"]`, `["work"]`))
+
+	res := env.Run("sync")
+
+	if res.ExitCode != 0 {
+		t.Fatalf("exit code = %d, stderr=%q", res.ExitCode, res.Stderr)
+	}
+	wantWork := block("# Rules\n\nBe kind.\n\n## Work\n\nUse the ticket tracker.\n\nBe brief.\n")
+	if got := env.ReadFile(filepath.Join(work, "CLAUDE.md")); got != wantWork {
+		t.Errorf("work CLAUDE.md = %q, want %q", got, wantWork)
+	}
+	wantPersonal := block("# Rules\n\nBe kind.\n\n## Home\n\nKeep it short.\n\nBe brief.\n")
+	if got := env.ReadFile(filepath.Join(personal, "CLAUDE.md")); got != wantPersonal {
+		t.Errorf("personal CLAUDE.md = %q, want %q", got, wantPersonal)
+	}
+}
+
+func TestSync_ChangingAProfilesTagsUpdatesItsInstructionsBlockWithoutAsking(t *testing.T) {
+	env := newEnv(t)
+	env.SourceFile("AGENTS.md", taggedAgents)
+	env.CommitSource("add instructions")
+	env.MakeProfileDir(".claude-personal")
+	work := env.MakeProfileDir(".claude-work")
+	claudeMd := filepath.Join(work, "CLAUDE.md")
+	env.WriteFile(claudeMd, "My rules.\n")
+	env.WriteConfig(twoProfilesConfig(env, "", `["work"]`))
+	if res := env.RunTerminal([]string{"y"}, "sync"); res.ExitCode != 0 {
+		t.Fatalf("first sync: exit code = %d, transcript:\n%s", res.ExitCode, res.Stdout)
+	}
+
+	env.WriteConfig(twoProfilesConfig(env, "", `["family"]`))
+	res := env.Run("sync") // no terminal: Baton's own block is updated silently
+
+	if res.ExitCode != 0 {
+		t.Fatalf("exit code = %d, stderr=%q", res.ExitCode, res.Stderr)
+	}
+	want := "My rules.\n\n" + block("# Rules\n\nBe kind.\n\n## Home\n\nKeep it short.\n\nBe brief.\n")
+	if got := env.ReadFile(claudeMd); got != want {
+		t.Errorf("CLAUDE.md = %q, want %q", got, want)
+	}
+}
+
+func TestSync_InstructionsThatLeaveNothingForAProfileGiveItNoBlock(t *testing.T) {
+	env := newEnv(t)
+	env.SourceFile("AGENTS.md", "<!-- baton:tags work -->\nWork only.\n<!-- /baton:tags -->\n")
+	env.CommitSource("add instructions")
+	personal := env.MakeProfileDir(".claude-personal")
+	work := env.MakeProfileDir(".claude-work")
+	env.WriteConfig(twoProfilesConfig(env, "", `["work"]`))
+
+	res := env.Run("sync")
+
+	if res.ExitCode != 0 {
+		t.Fatalf("exit code = %d, stderr=%q", res.ExitCode, res.Stderr)
+	}
+	if env.Exists(filepath.Join(personal, "CLAUDE.md")) {
+		t.Error("a Profile that accepts none of the tags got a CLAUDE.md")
+	}
+	if got, want := env.ReadFile(filepath.Join(work, "CLAUDE.md")), block("Work only.\n"); got != want {
+		t.Errorf("work CLAUDE.md = %q, want %q", got, want)
+	}
+
+	// Once the work Profile stops accepting work, its block goes and the file
+	// Baton created goes with it.
+	env.WriteConfig(twoProfilesConfig(env, "", ""))
+	if res := env.Run("sync"); res.ExitCode != 0 {
+		t.Fatalf("second sync: exit code = %d, stderr=%q", res.ExitCode, res.Stderr)
+	}
+	if env.Exists(filepath.Join(work, "CLAUDE.md")) {
+		t.Error("CLAUDE.md that held only Baton's block is still there")
+	}
+	if got := manifestBlocks(t, env, "claude-work"); len(got) != 0 {
+		t.Errorf("manifest blocks = %v, want none", got)
+	}
+}
+
+func TestSync_BrokenTagPartsInTheInstructionsStopSyncAndSayWhere(t *testing.T) {
+	cases := []struct {
+		name, agents, wantErr string
+	}{
+		{"never closed", "Intro.\n<!-- baton:tags work -->\nText.\n", "line 2: the tags part is never closed"},
+		{"closed twice", "<!-- baton:tags work -->\nText.\n<!-- /baton:tags -->\n<!-- /baton:tags -->\n", "line 4"},
+		{"nested", "<!-- baton:tags work -->\n<!-- baton:tags personal -->\n", "line 2: a tags part inside"},
+		{"no tags", "<!-- baton:tags  -->\nText.\n<!-- /baton:tags -->\n", "line 1: a tags part needs at least one tag"},
+		{"invalid tag", "<!-- baton:tags Work -->\nText.\n<!-- /baton:tags -->\n", "line 1: invalid tag \"Work\""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			env := newEnv(t)
+			env.SourceFile("AGENTS.md", tc.agents)
+			env.SourceFile("skills/greet/SKILL.md", "Hello.\n")
+			env.CommitSource("add instructions")
+			profile := env.MakeProfileDir(".claude-personal")
+			env.WriteConfig(standardConfig(env))
+
+			res := env.Run("sync")
+
+			if res.ExitCode == 0 {
+				t.Fatalf("exit code = 0, want non-zero; stdout=%q", res.Stdout)
+			}
+			if !strings.Contains(res.Stderr, "AGENTS.md") || !strings.Contains(res.Stderr, tc.wantErr) {
+				t.Errorf("stderr = %q, want it to name AGENTS.md and contain %q", res.Stderr, tc.wantErr)
+			}
+			if env.Exists(filepath.Join(profile, "skills")) || env.Exists(filepath.Join(profile, "CLAUDE.md")) {
+				t.Error("sync wrote into the Profile although AGENTS.md is broken")
+			}
+		})
+	}
+}
+
+func TestSync_UntaggedInstructionsAreCopiedUnchangedToEveryProfile(t *testing.T) {
+	env := newEnv(t)
+	agents := "# Rules\r\n\r\nBe kind.\r\n\r\n\r\n- <!-- baton:tags is only a marker as a whole line -->\r\n"
+	env.SourceFile("AGENTS.md", agents)
+	env.CommitSource("add instructions")
+	personal := env.MakeProfileDir(".claude-personal")
+	work := env.MakeProfileDir(".claude-work")
+	env.WriteConfig(twoProfilesConfig(env, "", `["work"]`))
+
+	res := env.Run("sync")
+
+	if res.ExitCode != 0 {
+		t.Fatalf("exit code = %d, stderr=%q", res.ExitCode, res.Stderr)
+	}
+	want := block("# Rules\r\n\r\nBe kind.\r\n\r\n\r\n- <!-- baton:tags is only a marker as a whole line -->\n")
+	for _, profile := range []string{personal, work} {
+		if got := env.ReadFile(filepath.Join(profile, "CLAUDE.md")); got != want {
+			t.Errorf("%s/CLAUDE.md = %q, want %q", profile, got, want)
+		}
+	}
+}
+
+func TestSync_TheQuestionForAnExistingInstructionsFileShowsOnlyWhatThatProfileReceives(t *testing.T) {
+	env := newEnv(t)
+	env.SourceFile("AGENTS.md", taggedAgents)
+	env.CommitSource("add instructions")
+	env.MakeProfileDir(".claude-personal")
+	work := env.MakeProfileDir(".claude-work")
+	claudeMd := filepath.Join(work, "CLAUDE.md")
+	env.WriteFile(claudeMd, "My rules.\n")
+	env.WriteConfig(twoProfilesConfig(env, "", `["work"]`))
+
+	res := env.RunTerminal([]string{"y"}, "sync")
+
+	if res.ExitCode != 0 {
+		t.Fatalf("exit code = %d, transcript:\n%s", res.ExitCode, res.Stdout)
+	}
+	if !strings.Contains(res.Stdout, "+Use the ticket tracker.") {
+		t.Errorf("transcript lacks the work part:\n%s", res.Stdout)
+	}
+	for _, unwanted := range []string{"Keep it short.", "baton:tags"} {
+		if strings.Contains(res.Stdout, unwanted) {
+			t.Errorf("transcript contains %q, which this Profile does not receive:\n%s", unwanted, res.Stdout)
+		}
+	}
+	if got := env.ReadFile(filepath.Join(onlyBackup(t, env, "claude-work"), "CLAUDE.md")); got != "My rules.\n" {
+		t.Errorf("backed up CLAUDE.md = %q, want the original", got)
+	}
+}

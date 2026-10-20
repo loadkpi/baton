@@ -7,6 +7,7 @@ import (
 
 	"github.com/loadkpi/baton/business/types/agent"
 	"github.com/loadkpi/baton/business/types/profilename"
+	"github.com/loadkpi/baton/business/types/tag"
 )
 
 // Config is the validated Baton configuration.
@@ -23,6 +24,9 @@ type Profile struct {
 	Agent agent.Agent
 	// Dir is the absolute path of the Profile directory.
 	Dir string
+	// Tags are the tags the Profile accepts. A Profile with none receives
+	// only untagged items.
+	Tags []tag.Tag
 }
 
 // Storer reads the configuration from its storage.

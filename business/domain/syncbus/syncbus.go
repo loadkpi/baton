@@ -15,12 +15,16 @@ import (
 
 	"github.com/loadkpi/baton/business/domain/configbus"
 	"github.com/loadkpi/baton/business/types/profilename"
+	"github.com/loadkpi/baton/business/types/tag"
 )
 
 // Skill is a directory of the source with a SKILL.md and optional supporting
 // files.
 type Skill struct {
-	Name  string
+	Name string
+	// Tags are the tags in the front matter of SKILL.md; none means the
+	// skill goes to every Profile.
+	Tags  []tag.Tag
 	Files []File
 }
 

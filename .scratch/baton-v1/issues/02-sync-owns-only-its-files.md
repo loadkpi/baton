@@ -4,13 +4,13 @@
 
 **Blocked by:** 01
 
-**Status:** ready-for-agent
+**Status:** done
 
 - [x] Changing a skill in the source updates it in the Profile on the next sync.
 - [x] Removing a skill from the source removes it from the Profile on the next sync, and from the manifest.
 - [x] Files and directories not in the manifest are never modified or deleted, except through the question below.
-- [ ] Sync can own a part of a shared file: a block between `<!-- baton:begin -->` and `<!-- baton:end -->` in Markdown, named keys in JSON and TOML. The manifest records which part it owns.
-  - Markdown block: done. JSON and TOML keys: not built in this ticket, because nothing in sync produces keys and the only test seam is the `baton` executable; tickets 04 and 05 add them with their first use (see `DESIGN.md` D4, "Not built here").
+- [x] Sync can own a part of a shared file: a block between `<!-- baton:begin -->` and `<!-- baton:end -->` in Markdown, named keys in JSON and TOML. The manifest records which part it owns.
+  - Markdown block: done. JSON and TOML keys: moved to ticket 04, because nothing in sync produces keys and the only test seam is the `baton` executable; tickets 04 and 05 add them with their first use (see `DESIGN.md` D4, "Not built here").
 - [x] The first change to a shared file shows the diff and asks; on yes the file is copied to `~/.baton/backups/<profile>/<ts>/` and written atomically (temp file and rename), and everything outside Baton's part stays byte-for-byte the same; on no, sync stops with an error naming the path.
 - [x] Later syncs update Baton's part without asking; if Baton's part was edited by hand, sync asks again.
 - [x] A foreign skill directory with the same name as a source skill gets the same question and backup before it is replaced.

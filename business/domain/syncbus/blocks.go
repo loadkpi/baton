@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/loadkpi/baton/business/types/tag"
 	"github.com/loadkpi/baton/foundation/mdblock"
 	"github.com/loadkpi/baton/foundation/textdiff"
 )
@@ -17,9 +18,11 @@ const instructionsFile = "CLAUDE.md"
 // blockMarkers delimit the part of a Markdown file that is Baton's.
 var blockMarkers = mdblock.Markers{Begin: "<!-- baton:begin -->", End: "<!-- baton:end -->"}
 
-// instructionsBlock returns the body of Baton's block: the source's
-// instructions without trailing blank lines. It fails if they hold a marker.
-func instructionsBlock(source Source) (body string, ok bool, err error) {
+// instructionsBlock returns the body of Baton's block for a Profile that
+// accepts the given tags: the source's instructions with the parts of other
+// tags left out, without trailing blank lines. ok is false when nothing is
+// left. It fails if the source holds a block marker or broken tag parts.
+func instructionsBlock(source Source, accepted []tag.Tag) (body string, ok bool, err error) {
 	if !source.HasInstructions {
 		return "", false, nil
 	}
@@ -28,7 +31,12 @@ func instructionsBlock(source Source) (body string, ok bool, err error) {
 			return "", false, fmt.Errorf("AGENTS.md contains the line %q, which Baton uses to mark its block", t)
 		}
 	}
-	return strings.TrimRight(source.Instructions, "\r\n"), true, nil
+	rendered, err := renderForTags(source.Instructions, accepted)
+	if err != nil {
+		return "", false, err
+	}
+	rendered = strings.TrimRight(rendered, "\r\n")
+	return rendered, strings.TrimSpace(rendered) != "", nil
 }
 
 func sumOf(body string) string {
@@ -53,7 +61,7 @@ func recordedSum(m Manifest, rel string) (string, bool) {
 // as long as its body is still what Baton wrote; anything else (a file that
 // has no block, a block that was edited) is a question.
 func (b *Bus) planInstructions(ctx context.Context, plan *profilePlan, previous Manifest, source Source) error {
-	body, wanted, err := instructionsBlock(source)
+	body, wanted, err := instructionsBlock(source, plan.profile.Tags)
 	if err != nil {
 		return err
 	}

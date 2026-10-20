@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/loadkpi/baton/business/domain/configbus"
+	"github.com/loadkpi/baton/business/types/tag"
 	"github.com/loadkpi/baton/foundation/textdiff"
 )
 
@@ -81,6 +82,9 @@ func (b *Bus) plan(ctx context.Context, p configbus.Profile, source Source) (pro
 	plan := profilePlan{profile: p}
 	wanted := make(map[string]bool)
 	for _, s := range source.Skills {
+		if !tag.AcceptedBy(s.Tags, p.Tags) {
+			continue
+		}
 		if err := b.planSkill(ctx, &plan, owned, s); err != nil {
 			return profilePlan{}, err
 		}

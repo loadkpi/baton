@@ -16,7 +16,9 @@ import (
 
 	"github.com/loadkpi/baton/business/domain/syncbus"
 	"github.com/loadkpi/baton/business/types/profilename"
+	"github.com/loadkpi/baton/business/types/tag"
 	"github.com/loadkpi/baton/foundation/atomicfile"
+	"github.com/loadkpi/baton/foundation/frontmatter"
 	"github.com/loadkpi/baton/foundation/git"
 )
 
@@ -87,13 +89,33 @@ func (s *Store) QuerySource(_ context.Context, source string) (syncbus.Source, e
 		if err != nil {
 			return syncbus.Source{}, err
 		}
-		if !slices.ContainsFunc(files, func(f syncbus.File) bool { return f.Path == "SKILL.md" }) {
+		i := slices.IndexFunc(files, func(f syncbus.File) bool { return f.Path == "SKILL.md" })
+		if i < 0 {
 			res.Skipped = append(res.Skipped, e.Name())
 			continue
 		}
-		res.Skills = append(res.Skills, syncbus.Skill{Name: e.Name(), Files: files})
+		skill, err := toBusSkill(e.Name(), files, files[i])
+		if err != nil {
+			return syncbus.Source{}, err
+		}
+		res.Skills = append(res.Skills, skill)
 	}
 	return res, nil
+}
+
+// toBusSkill builds a skill from its files. The tags are the `tags` key of the
+// front matter of SKILL.md; an invalid one is an error naming the skill,
+// because a skill whose tags cannot be read must not be sent anywhere.
+func toBusSkill(name string, files []syncbus.File, skillMd syncbus.File) (syncbus.Skill, error) {
+	list, _, err := frontmatter.List(string(skillMd.Data), "tags")
+	if err != nil {
+		return syncbus.Skill{}, fmt.Errorf("skills/%s/SKILL.md: tags: %w", name, err)
+	}
+	tags, err := tag.ParseAll(list)
+	if err != nil {
+		return syncbus.Skill{}, fmt.Errorf("skills/%s/SKILL.md: %w", name, err)
+	}
+	return syncbus.Skill{Name: name, Tags: tags, Files: files}, nil
 }
 
 // readFiles reads all regular files below dir, sorted by path.
