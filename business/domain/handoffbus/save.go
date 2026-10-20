@@ -29,9 +29,10 @@ func NewSaver(storer Storer, projects *projectbus.Bus, tasks *taskbus.Bus, work 
 	return &Saver{storer: storer, projects: projects, tasks: tasks, work: work}
 }
 
-// NewMountedSaver creates the domain inside a sandbox container. The
+// NewMountedSaver creates the domain inside a container, a sandbox or a Compose
+// service (both mount the Project's directory at /baton/project). The
 // directories there are not the host's, so the Working copy is not found from
-// the directory: it is the Project's main checkout, the only place a sandbox
+// the directory: it is the Project's main checkout, the only place a container
 // Session runs (DESIGN.md, D3), as the mounted Project record names it. The
 // stores are those of the mounted Project directory.
 func NewMountedSaver(storer Storer, projects *projectbus.Bus, tasks *taskbus.Bus) *Saver {

@@ -23,7 +23,7 @@ Never put secrets in it: no tokens, passwords or keys, not even ones you saw in 
 
 ## 2. Save it
 
-Pipe the Markdown into `baton handoff save`, from inside the project (the Task is found from the current directory). The binary is `/baton/bin/baton` if that file exists (you are in a sandbox), otherwise `~/.baton/bin/baton`, otherwise `baton` from `PATH`:
+Pipe the Markdown into `baton handoff save`, from inside the project (the Task is found from the current directory). The binary is `/baton/bin/baton` if that file exists (you are in a sandbox or in a Compose dev container), otherwise `~/.baton/bin/baton`, otherwise `baton` from `PATH`:
 
 ```sh
 BATON=/baton/bin/baton

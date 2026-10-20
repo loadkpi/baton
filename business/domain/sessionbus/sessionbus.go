@@ -35,7 +35,11 @@ type Event struct {
 	// AgentPIDFallback is set when no ancestor of the hook was recognized as
 	// the Agent and AgentPID is the hook's direct parent.
 	AgentPIDFallback bool
-	SessionID        string
+	// Container is the full id of the container the hook ran in, when it
+	// could be found; empty on the host and where the kernel hides it. A
+	// container with a host name of its own is found by it.
+	Container string
+	SessionID string
 	// Name is the Event's name: hook_event_name of the payload.
 	Name string
 	CWD  string
@@ -92,6 +96,9 @@ type Machine interface {
 	QueryProcess(ctx context.Context, pid int) (Process, error)
 	// QueryHostname returns the name of the machine.
 	QueryHostname(ctx context.Context) (string, error)
+	// QueryContainer returns the id of the container the process runs in,
+	// or "" when it is not in one or the id is not known.
+	QueryContainer(ctx context.Context) (string, error)
 }
 
 // Bus is the Session domain.

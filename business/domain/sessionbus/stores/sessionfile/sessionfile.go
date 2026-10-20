@@ -57,6 +57,7 @@ type fileEvent struct {
 	AgentPID         int             `json:"agent_pid"`
 	AgentStart       uint64          `json:"agent_start"`
 	AgentPIDFallback bool            `json:"agent_pid_fallback,omitempty"`
+	Container        string          `json:"container,omitempty"`
 	SessionID        string          `json:"session_id"`
 	Event            string          `json:"event"`
 	CWD              string          `json:"cwd"`
@@ -74,6 +75,7 @@ func toFileEvent(e sessionbus.Event) fileEvent {
 		AgentPID:         e.AgentPID,
 		AgentStart:       e.AgentStart,
 		AgentPIDFallback: e.AgentPIDFallback,
+		Container:        e.Container,
 		SessionID:        e.SessionID,
 		Event:            e.Name,
 		CWD:              e.CWD,
@@ -215,7 +217,7 @@ func toBusEvent(line []byte) (sessionbus.Event, error) {
 	}
 	return sessionbus.Event{
 		TS: ts, Agent: a, Profile: p, Runtime: r, Host: fe.Host,
-		AgentPID: fe.AgentPID, AgentStart: fe.AgentStart, AgentPIDFallback: fe.AgentPIDFallback,
+		AgentPID: fe.AgentPID, AgentStart: fe.AgentStart, AgentPIDFallback: fe.AgentPIDFallback, Container: fe.Container,
 		SessionID: fe.SessionID, Name: fe.Event, CWD: fe.CWD, Payload: fe.Payload,
 	}, nil
 }

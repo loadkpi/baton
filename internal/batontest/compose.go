@@ -2,6 +2,7 @@ package batontest
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -30,6 +31,13 @@ type ContainerSpec struct {
 	// Env is the environment the container was created with, as "NAME=value".
 	// Every `compose exec` starts with it, and with nothing of the caller's.
 	Env []string
+	// Hostname is the host name the container was created with
+	// (`hostname:` in a Compose file); the first 12 characters of its id when
+	// empty, which is what Docker gives a container that has none.
+	Hostname string
+	// Created is when the container was created, RFC 3339; a date long
+	// before any test Event when empty.
+	Created string
 }
 
 // Container is the fake file system of a container. It is a directory of the
@@ -49,16 +57,18 @@ type fakeState struct {
 }
 
 type fakeContainer struct {
-	ID      string       `json:"id"`
-	Service string       `json:"service"`
-	Running bool         `json:"running"`
-	User    string       `json:"user"`
-	Image   string       `json:"image"`
-	Home    string       `json:"home"`
-	Root    string       `json:"root"`
-	Env     []string     `json:"env"`
-	Volumes []fakeVolume `json:"volumes"`
-	Binds   []fakeBind   `json:"binds"`
+	ID       string       `json:"id"`
+	Service  string       `json:"service"`
+	Running  bool         `json:"running"`
+	User     string       `json:"user"`
+	Image    string       `json:"image"`
+	Home     string       `json:"home"`
+	Root     string       `json:"root"`
+	Env      []string     `json:"env"`
+	Hostname string       `json:"hostname"`
+	Created  string       `json:"created"`
+	Volumes  []fakeVolume `json:"volumes"`
+	Binds    []fakeBind   `json:"binds"`
 }
 
 type fakeVolume struct {
@@ -85,7 +95,14 @@ func (e *Env) AddContainer(spec ContainerSpec) *Container {
 	if spec.Home == "" {
 		spec.Home = "/home/dev"
 	}
-	id := strings.Repeat(string(rune('a'+len(e.containers))), 64)
+	id := strings.Repeat(string(rune('a'+e.containerSeq)), 64)
+	e.containerSeq++
+	if spec.Hostname == "" {
+		spec.Hostname = id[:12]
+	}
+	if spec.Created == "" {
+		spec.Created = "2000-01-01T00:00:00Z"
+	}
 	c := &Container{env: e, spec: spec, id: id, root: filepath.Join(filepath.Dir(e.stubDir), "containers", id)}
 	for _, dir := range []string{spec.Home, "/tmp", "/etc"} {
 		c.MkdirAll(dir)
@@ -111,7 +128,7 @@ func (e *Env) writeFakeDocker() {
 	e.t.Helper()
 	st := fakeState{MissingVolumes: e.missingVolumes}
 	for _, c := range e.containers {
-		fc := fakeContainer{ID: c.id, Service: c.spec.Service, Running: c.spec.Running, User: c.spec.User, Image: c.spec.Image, Home: c.spec.Home, Root: c.root, Env: c.spec.Env}
+		fc := fakeContainer{ID: c.id, Service: c.spec.Service, Running: c.spec.Running, User: c.spec.User, Image: c.spec.Image, Home: c.spec.Home, Root: c.root, Env: c.spec.Env, Hostname: c.spec.Hostname, Created: c.spec.Created}
 		for name, dest := range c.spec.Volumes {
 			fc.Volumes = append(fc.Volumes, fakeVolume{Name: name, Dest: dest})
 		}
@@ -140,6 +157,43 @@ func (e *Env) RemoveFakeVolume(name string) {
 	e.t.Helper()
 	e.missingVolumes = append(e.missingVolumes, name)
 	e.writeFakeDocker()
+}
+
+// Remove deletes the container from the fake docker, as `docker compose down`
+// or a recreate does: its id is never used again. The files stay for the test
+// to read.
+func (c *Container) Remove() {
+	c.env.t.Helper()
+	for i, other := range c.env.containers {
+		if other == c {
+			c.env.containers = append(c.env.containers[:i], c.env.containers[i+1:]...)
+			break
+		}
+	}
+	c.env.writeFakeDocker()
+}
+
+// Process makes pid run in the container, as /proc/<pid>/stat shows it, with
+// the start time in clock ticks since boot. `docker exec` of the fake reads
+// these files, so the script Baton sends is the script that runs.
+func (c *Container) Process(pid int, comm string, start uint64) {
+	c.env.t.Helper()
+	c.ProcessInState(pid, comm, "S", start)
+}
+
+// ProcessInState is Process for a process in the given state (field 3 of the
+// stat line): Z for a zombie, X for a dead one.
+func (c *Container) ProcessInState(pid int, comm, state string, start uint64) {
+	c.env.t.Helper()
+	c.WriteFile(fmt.Sprintf("/proc/%d/stat", pid), fmt.Sprintf("%d (%s) %s 1 %d %d 0 -1 4194560 100 0 0 0 1 1 0 0 20 0 1 0 %d 1000000 500 18446744073709551615\n", pid, comm, state, pid, pid, start))
+}
+
+// KillProcess makes pid stop running in the container: its stat file is gone.
+func (c *Container) KillProcess(pid int) {
+	c.env.t.Helper()
+	if err := os.Remove(c.host(fmt.Sprintf("/proc/%d/stat", pid))); err != nil {
+		c.env.t.Fatal(err)
+	}
 }
 
 // ID is the container id the fake docker gives.

@@ -99,8 +99,13 @@ type Container struct {
 	// Image is the image the container was created from.
 	Image string
 	// Env is the container's environment as "NAME=value".
-	Env    []string
-	Mounts []Mount
+	Env []string
+	// Hostname is the host name the container was created with: its short
+	// id unless the Compose file sets `hostname:`.
+	Hostname string
+	// Created is when the container was created (zero when unknown).
+	Created time.Time
+	Mounts  []Mount
 }
 
 // Inspect reads a container.
@@ -110,15 +115,17 @@ func (c Client) Inspect(ctx context.Context, container string) (Container, error
 		return Container{}, err
 	}
 	var docs []struct {
-		ID    string
-		State struct{ Running bool }
-		Image string
+		ID      string
+		State   struct{ Running bool }
+		Image   string
+		Created string
 		// Config.Image is the name the container was created with, which is
 		// what to run again; Image is only the id.
 		Config struct {
-			User  string
-			Image string
-			Env   []string
+			User     string
+			Image    string
+			Env      []string
+			Hostname string
 		}
 		Mounts []struct {
 			Type        string
@@ -135,7 +142,10 @@ func (c Client) Inspect(ctx context.Context, container string) (Container, error
 		return Container{}, fmt.Errorf("docker inspect %s: expected one container, got %d", container, len(docs))
 	}
 	d := docs[0]
-	got := Container{ID: d.ID, Running: d.State.Running, User: d.Config.User, Image: d.Config.Image, Env: d.Config.Env}
+	got := Container{ID: d.ID, Running: d.State.Running, User: d.Config.User, Image: d.Config.Image, Env: d.Config.Env, Hostname: d.Config.Hostname}
+	if created, err := time.Parse(time.RFC3339Nano, d.Created); err == nil {
+		got.Created = created
+	}
 	if got.Image == "" {
 		got.Image = d.Image
 	}

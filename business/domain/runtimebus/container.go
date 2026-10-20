@@ -19,9 +19,19 @@ type Containers interface {
 	ProcessStarts(ctx context.Context, container string, pids []int) (map[int]uint64, error)
 }
 
-// AliveInContainers is the liveness check of every container Runtime (sandbox,
-// and later compose). A Process's Host is the host name inside its container,
-// the first 12 characters of the container id.
+// AliveInContainers is the liveness check of every container Runtime (sandbox
+// and compose). A Process is found in a container in one of two ways:
+//
+//   - by Container, the full id its hook found for itself: the container is
+//     among the running ones with exactly that id, or the Process is gone.
+//     Nothing is matched by a prefix or a name, so a recreated container, which
+//     has a new id, never stands in for the one it replaced, even when the
+//     Compose file gives both the same host name;
+//   - else by Host, the host name inside the container, which is the first 12
+//     characters of the container id unless the container was given a name
+//     (`hostname:`). Such a name is not an id and does not find anything.
+//
+// Then:
 //
 //   - The container is not among the running ones: the Process is gone.
 //   - It is: the PID is read inside it, with one ProcessStarts call for all the
@@ -29,15 +39,15 @@ type Containers interface {
 //     start time.
 //
 // Containers is asked once for the running ones, and not at all when no Process
-// names a container. A Process whose Host does not look like a container id (a
-// container with a name of its own for a host name cannot be found by it) or
-// matches more than one container is ProcessUnknown, and so are all the
-// Processes that Docker failed to answer for, with the error.
+// names a container. A Process that names none (no Container, and a Host that
+// does not look like a container id) or whose Host is the start of more than
+// one container id is ProcessUnknown, and so are all the Processes that Docker
+// failed to answer for, with the error.
 func AliveInContainers(ctx context.Context, c Containers, procs []Process) ([]Liveness, error) {
 	out := make([]Liveness, len(procs))
 	var asked []int
 	for i, p := range procs {
-		if looksLikeContainerID(p.Host) {
+		if p.NamesContainer() {
 			asked = append(asked, i)
 		}
 	}
@@ -54,7 +64,11 @@ func AliveInContainers(ctx context.Context, c Containers, procs []Process) ([]Li
 	for _, i := range asked {
 		var matches []string
 		for _, id := range running {
-			if strings.HasPrefix(id, procs[i].Host) {
+			if named := procs[i].Container; validContainerID(named) {
+				if id == named {
+					matches = append(matches, id)
+				}
+			} else if strings.HasPrefix(id, procs[i].Host) {
 				matches = append(matches, id)
 			}
 		}
@@ -108,4 +122,10 @@ func looksLikeContainerID(s string) bool {
 		}
 	}
 	return true
+}
+
+// validContainerID is true for a full container id: 64 lower-case hexadecimal
+// digits.
+func validContainerID(s string) bool {
+	return len(s) == 64 && looksLikeContainerID(s)
 }

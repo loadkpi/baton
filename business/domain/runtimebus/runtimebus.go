@@ -7,6 +7,7 @@ package runtimebus
 import (
 	"context"
 	"errors"
+	"time"
 
 	"github.com/loadkpi/baton/business/domain/configbus"
 	"github.com/loadkpi/baton/business/domain/syncbus"
@@ -68,6 +69,21 @@ type Process struct {
 	Host  string
 	PID   int
 	Start uint64
+	// Container is the full id of the container the hook ran in, when it
+	// found it; empty otherwise (older Events, a kernel that hides it).
+	Container string
+	// Project is the Project whose Baton directory holds the Events, for a
+	// Process in a container; the zero value on the host. Seen is the time
+	// of the newest Event that named the Process. A Runtime that has to find
+	// a container by other means than Container and Host uses both.
+	Project projectname.Name
+	Seen    time.Time
+}
+
+// NamesContainer is true when the Process says which container it is in, by
+// its recorded id or by a Host that is a container id.
+func (p Process) NamesContainer() bool {
+	return validContainerID(p.Container) || looksLikeContainerID(p.Host)
 }
 
 // Liveness is what a Runtime can say about one Process.

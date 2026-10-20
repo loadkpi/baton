@@ -12,7 +12,7 @@ import (
 	"github.com/loadkpi/baton/business/domain/handoffbus/stores/handofffile"
 	"github.com/loadkpi/baton/business/domain/projectbus"
 	"github.com/loadkpi/baton/business/domain/projectbus/stores/projectfile"
-	"github.com/loadkpi/baton/business/domain/runtimebus/stores/runtimesandbox"
+	"github.com/loadkpi/baton/business/domain/runtimebus"
 	"github.com/loadkpi/baton/business/domain/taskbus"
 	"github.com/loadkpi/baton/business/domain/taskbus/stores/taskfile"
 )
@@ -22,7 +22,7 @@ const handoffSaveUsage = "usage: baton handoff save   (the narrative, in Markdow
 // runHandoffSave implements `baton handoff save`: it reads the narrative part
 // of a Handoff from standard input and keeps it for the Task of the current
 // directory. It is what the /baton-handoff skill calls, on the host and, as
-// /baton/bin/baton, inside a sandbox.
+// /baton/bin/baton, inside a container (sandbox or Compose).
 func runHandoffSave(ctx context.Context, c console, home string, args []string) int {
 	if len(args) != 0 {
 		return c.usagef("handoff save: unexpected argument %q (%s)", args[0], handoffSaveUsage)
@@ -45,11 +45,12 @@ func runHandoffSave(ctx context.Context, c console, home string, args []string) 
 }
 
 // newHandoffSaver wires the domain. Where the Project's Baton directory is
-// mounted (the container root is the one variable the tests of the sandbox
-// set, see containerRootVar), it is a sandbox: the stores are those of the
+// mounted (the container root is the one variable the tests of the containers
+// set, see containerRootVar), it is a container, a sandbox's or a Compose
+// service's, which mount it at the same place: the stores are those of the
 // mounted directory. Otherwise it is the host.
 func newHandoffSaver(home string, cfg configbus.Config) *handoffbus.Saver {
-	mount := filepath.Join(os.Getenv(containerRootVar), runtimesandbox.ContainerProject)
+	mount := filepath.Join(os.Getenv(containerRootVar), runtimebus.ContainerProject)
 	if info, err := os.Stat(mount); err == nil && info.IsDir() {
 		return handoffbus.NewMountedSaver(
 			handofffile.NewMounted(mount),

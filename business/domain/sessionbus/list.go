@@ -97,7 +97,9 @@ func (b *Bus) List(ctx context.Context) (sessions []Session, warnings []string, 
 		err = b.storer.QueryEventsBackward(ctx, ref, func(e Event) bool {
 			if newest {
 				s.Last, newest = e.TS, false
-				proc = toBusProcess(e)
+				if proc = toBusProcess(e); proc != nil {
+					proc.Project = ref.Project
+				}
 			}
 			st, known := status.FromEvent(e.Agent, e.Name)
 			if !decided {
@@ -142,7 +144,7 @@ func toBusProcess(e Event) *runtimebus.Process {
 	if e.AgentPID <= 0 || e.AgentStart == 0 || e.AgentPIDFallback {
 		return nil
 	}
-	return &runtimebus.Process{Host: e.Host, PID: e.AgentPID, Start: e.AgentStart}
+	return &runtimebus.Process{Host: e.Host, PID: e.AgentPID, Start: e.AgentStart, Container: e.Container, Seen: e.TS}
 }
 
 // markLost sets the status of the Sessions whose Agent is gone to lost. Each

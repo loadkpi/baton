@@ -387,18 +387,20 @@ func TestComposeLs_ASessionOfAnotherAgentIsShownToo(t *testing.T) {
 	}
 }
 
-func TestComposeLs_SaysThatLostIsNotCheckedForComposeYetAndKeepsTheEventStatus(t *testing.T) {
+func TestComposeLs_ASessionWhoseHookDidNotFindTheAgentKeepsTheStatusOfItsEventsAndIsNotWarnedAbout(t *testing.T) {
+	// The hook here was started by the test, not by a Claude, so its PID is
+	// only the hook's parent (DESIGN.md, ticket 11): nothing to judge.
 	env := newEnv(t)
 	_, root := startedByHand(t, env)
 	composeHook(t, env, root, "UserPromptSubmit", "s1", "/workspace")
 
 	res := env.Run("ls")
 
-	if res.ExitCode != 0 || !strings.Contains(res.Stdout, "running") {
+	if res.ExitCode != 0 || !strings.Contains(res.Stdout, "running") || strings.Contains(res.Stdout, "lost") {
 		t.Errorf("exit code = %d, stdout=%q, want the status the Events give", res.ExitCode, res.Stdout)
 	}
-	if want := "baton: warning: cannot tell whether compose sessions are still running, showing what their events say: compose sessions are not checked for being lost yet\n"; res.Stderr != want {
-		t.Errorf("stderr = %q, want %q", res.Stderr, want)
+	if res.Stderr != "" {
+		t.Errorf("stderr = %q, want none", res.Stderr)
 	}
 }
 

@@ -30,16 +30,18 @@ type state struct {
 }
 
 type container struct {
-	ID      string   `json:"id"`
-	Service string   `json:"service"`
-	Running bool     `json:"running"`
-	User    string   `json:"user"`
-	Image   string   `json:"image"`
-	Home    string   `json:"home"`
-	Root    string   `json:"root"`
-	Env     []string `json:"env"`
-	Volumes []volume `json:"volumes"`
-	Binds   []bind   `json:"binds"`
+	ID       string   `json:"id"`
+	Service  string   `json:"service"`
+	Running  bool     `json:"running"`
+	User     string   `json:"user"`
+	Image    string   `json:"image"`
+	Home     string   `json:"home"`
+	Root     string   `json:"root"`
+	Env      []string `json:"env"`
+	Hostname string   `json:"hostname"`
+	Created  string   `json:"created"`
+	Volumes  []volume `json:"volumes"`
+	Binds    []bind   `json:"binds"`
 }
 
 type volume struct {
@@ -69,6 +71,10 @@ func main() {
 	switch args[0] {
 	case "compose":
 		compose(os.Args[1], st, args[1:])
+	case "ps":
+		ps(st)
+	case "exec":
+		dockerExec(st, args[1:])
 	case "inspect":
 		inspect(st, args[len(args)-1])
 	case "volume":
@@ -218,13 +224,64 @@ func inspect(st state, id string) {
 		mounts = append(mounts, mount{"bind", "", b.Source, b.Dest, !b.ReadOnly})
 	}
 	doc := []map[string]any{{
-		"Id":     c.ID,
-		"State":  map[string]any{"Running": c.Running},
-		"Image":  "sha256:" + c.ID,
-		"Config": map[string]any{"User": c.User, "Image": c.Image, "Env": c.Env},
-		"Mounts": mounts,
+		"Id":      c.ID,
+		"State":   map[string]any{"Running": c.Running},
+		"Image":   "sha256:" + c.ID,
+		"Created": c.Created,
+		"Config":  map[string]any{"User": c.User, "Image": c.Image, "Env": c.Env, "Hostname": c.Hostname},
+		"Mounts":  mounts,
 	}}
 	_ = json.NewEncoder(os.Stdout).Encode(doc)
+}
+
+// ps handles `ps --no-trunc --format {{.ID}}`: the full ids of the running
+// containers, one per line.
+func ps(st state) {
+	for _, c := range st.Containers {
+		if c.Running {
+			fmt.Println(c.ID)
+		}
+	}
+}
+
+// dockerExec handles `exec CONTAINER sh -c SCRIPT sh ARGS...`, the question
+// Baton asks about the processes of a container: the script is run for real
+// with /proc/ pointing at the container's fixtures (root/proc/<pid>/stat), so
+// the script Baton wrote is what is tested. The container is named by its id
+// or a prefix of it, like docker does. Anything else is run as
+// `compose exec` runs a command.
+func dockerExec(st state, args []string) {
+	for len(args) > 0 && strings.HasPrefix(args[0], "-") {
+		args = args[1:]
+	}
+	if len(args) < 2 {
+		fail(1, "dockerfake: exec: want CONTAINER COMMAND")
+	}
+	var found []container
+	for _, c := range st.Containers {
+		if strings.HasPrefix(c.ID, args[0]) {
+			found = append(found, c)
+		}
+	}
+	if len(found) != 1 {
+		fail(1, "Error response from daemon: No such container: %s", args[0])
+	}
+	c := found[0]
+	if !c.Running {
+		fail(1, "Error response from daemon: container %s is not running", c.ID)
+	}
+	argv := args[1:]
+	if len(argv) >= 4 && argv[0] == "sh" && argv[1] == "-c" {
+		script := strings.ReplaceAll(argv[2], "/proc/", c.Root+"/proc/")
+		cmd := exec.Command("sh", append([]string{"-c", script}, argv[3:]...)...)
+		cmd.Stdin, cmd.Stderr = os.Stdin, os.Stderr
+		var out bytes.Buffer
+		cmd.Stdout = &out
+		code := exitCode(cmd.Run())
+		emit(out.Bytes(), c.Root)
+		os.Exit(code)
+	}
+	execIn(c, "", argv)
 }
 
 func volumeInspect(st state, name string) {

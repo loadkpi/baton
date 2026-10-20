@@ -30,6 +30,9 @@ type Env struct {
 	// containers are the fake Compose containers of AddContainer.
 	containers     []*Container
 	missingVolumes []string
+	// containerSeq counts the containers ever added, so that a container
+	// added after another was removed never gets its id.
+	containerSeq int
 }
 
 // New creates an Env around the baton binary built by BuildBinary. It makes

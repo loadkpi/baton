@@ -53,6 +53,12 @@ func (b *Bus) Record(ctx context.Context, h Hook) error {
 		return err
 	}
 	proc, fallback := b.findAgent(ctx, h.Agent, h.ParentPID)
+	// Best effort: the id lets a reader find the container whatever its host
+	// name is, and nothing else depends on it, so a hook never fails for it.
+	var container string
+	if h.Runtime != runtime.Host {
+		container, _ = b.machine.QueryContainer(ctx)
+	}
 
 	return b.storer.SaveEvent(ctx, Event{
 		TS:               b.now().UTC(),
@@ -63,6 +69,7 @@ func (b *Bus) Record(ctx context.Context, h Hook) error {
 		AgentPID:         proc.PID,
 		AgentStart:       proc.Start,
 		AgentPIDFallback: fallback,
+		Container:        container,
 		SessionID:        fields.SessionID,
 		Name:             fields.Event,
 		CWD:              fields.CWD,

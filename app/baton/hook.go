@@ -20,9 +20,11 @@ import (
 // containerRootVar names the one environment variable Baton reads for the
 // mount of a sandbox container: the directory that stands for the root of the
 // container, "/" when it is not set. It exists so that tests, which cannot
-// write to /baton, can put the mount somewhere else. Two commands read it:
-// `baton hook --runtime sandbox`, so it has no effect on a host Session, and
-// `baton handoff save`, which is in a sandbox when the mount is there.
+// write to /baton or /proc, can put the mount, and the /proc/self files in which
+// the hook looks for its container id, somewhere else. Two commands read it:
+// `baton hook --runtime sandbox|compose`, so it has no effect on a host
+// Session, and `baton handoff save`, which is in a container when the mount is
+// there.
 const containerRootVar = "BATON_CONTAINER_ROOT"
 
 // runHook implements `baton hook <agent> --profile <name> --runtime <runtime>`,
@@ -64,7 +66,7 @@ func runHook(ctx context.Context, c console, home string, args []string) int {
 		return c.errorf("hook: %v", err)
 	}
 
-	bus := sessionbus.New(storer, sessionproc.New())
+	bus := sessionbus.New(storer, sessionproc.NewIn(os.Getenv(containerRootVar)))
 	if err := bus.Record(ctx, h); err != nil {
 		return c.errorf("hook: %v", err)
 	}

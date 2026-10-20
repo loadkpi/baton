@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 )
@@ -75,4 +76,49 @@ func ParseStat(stat string) (Process, error) {
 		return Process{}, err
 	}
 	return Process{PID: pid, PPID: ppid, Comm: stat[open+1 : closing], State: rest[0], Start: start}, nil
+}
+
+// containerFileRE matches the files of a Docker container's own directory that
+// the engine bind-mounts into every container.
+var containerFileRE = regexp.MustCompile(`/containers/([0-9a-f]{64})/(?:hostname|hosts|resolv\.conf)$`)
+
+// cgroupRE matches the cgroup path of a container's processes, as the Docker
+// engine (`/docker/<id>`, v1 and v2 with the host's cgroup namespace) and
+// systemd (`docker-<id>.scope`) name it.
+var cgroupRE = regexp.MustCompile(`(?:/docker/|/docker-)([0-9a-f]{64})(?:\.scope)?(?:/|$)`)
+
+// ContainerID returns the id of the container a process runs in, from the
+// text of its /proc/<pid>/mountinfo and /proc/<pid>/cgroup, or "" when neither
+// shows one. The mount table is the better witness: the engine bind-mounts
+// <state>/containers/<id>/{hostname,hosts,resolv.conf} at /etc/..., which a
+// private cgroup namespace does not hide (it shows the cgroup as "/"). Only
+// those three mounts count, so that a directory of another container that the
+// user mounted somewhere is not mistaken for the container's own.
+func ContainerID(mountinfo, cgroup string) string {
+	for _, line := range strings.Split(mountinfo, "\n") {
+		// id parent major:minor root mount-point options ...
+		fields := strings.Fields(line)
+		if len(fields) < 5 {
+			continue
+		}
+		switch fields[4] {
+		case "/etc/hostname", "/etc/hosts", "/etc/resolv.conf":
+		default:
+			continue
+		}
+		if m := containerFileRE.FindStringSubmatch(fields[3]); m != nil {
+			return m[1]
+		}
+	}
+	for _, line := range strings.Split(cgroup, "\n") {
+		// hierarchy:controllers:path
+		if _, path, ok := strings.Cut(line, ":"); ok {
+			if _, path, ok = strings.Cut(path, ":"); ok {
+				if m := cgroupRE.FindStringSubmatch(path); m != nil {
+					return m[1]
+				}
+			}
+		}
+	}
+	return ""
 }

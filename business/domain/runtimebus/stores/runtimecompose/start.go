@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/loadkpi/baton/business/domain/configbus"
 	"github.com/loadkpi/baton/business/domain/runtimebus"
@@ -55,11 +56,18 @@ func (r *Runtime) service(ctx context.Context, name projectname.Name) (service, 
 	return service{}, fmt.Errorf("unknown project %q", name)
 }
 
-// inspected is what looking at a container gave.
+// inspected is what looking at a container gave, and when.
 type inspected struct {
 	box docker.Container
 	err error
+	at  time.Time
 }
+
+// boxTTL is how long what was seen of a container is remembered by HostPath
+// and ContainerPath. `baton ls` asks once per Session and is done within it;
+// `baton watch` lives for days, and a container that was recreated, or did not
+// exist when it first asked, must be looked at again.
+const boxTTL = time.Second
 
 // find looks at the service's container, running or not. ok is false when the
 // service has none.
@@ -81,12 +89,13 @@ func (s service) find(ctx context.Context, c docker.Client) (box docker.Containe
 	return box, true, nil
 }
 
-// inspect looks at a Project's container for HostPath and ContainerPath, once.
+// inspect looks at a Project's container for HostPath and ContainerPath, once
+// per boxTTL when it was found.
 func (r *Runtime) inspect(ctx context.Context, name projectname.Name) (docker.Container, error) {
-	if got, ok := r.boxes[name]; ok {
+	if got, ok := r.boxes[name]; ok && time.Since(got.at) < boxTTL {
 		return got.box, got.err
 	}
-	var got inspected
+	got := inspected{at: time.Now()}
 	svc, err := r.service(ctx, name)
 	if err == nil {
 		var ok bool
@@ -95,7 +104,10 @@ func (r *Runtime) inspect(ctx context.Context, name projectname.Name) (docker.Co
 		}
 	}
 	got.err = err
-	r.boxes[name] = got
+	if err == nil {
+		// A failure is asked again at once: the container may appear.
+		r.boxes[name] = got
+	}
 	return got.box, got.err
 }
 

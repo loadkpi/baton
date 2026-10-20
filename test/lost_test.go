@@ -22,6 +22,9 @@ type proc struct {
 	start uint64
 	// fallback marks a PID that is only the hook's parent, not a recognized Agent.
 	fallback bool
+	// container is the container id the hook found for itself; empty leaves
+	// the field out, as the hook does where it could not tell.
+	container string
 }
 
 // writeProcEvent appends an Event that carries the given process to the Event
@@ -41,6 +44,9 @@ func writeProcEventPayload(t *testing.T, env *batontest.Env, path, rt, profile, 
 	}
 	if p.fallback {
 		doc["agent_pid_fallback"] = true
+	}
+	if p.container != "" {
+		doc["container"] = p.container
 	}
 	line, err := json.Marshal(doc)
 	if err != nil {

@@ -9,6 +9,7 @@ import (
 	"io"
 	"path"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/loadkpi/baton/business/domain/configbus"
@@ -33,7 +34,7 @@ type Runtime struct {
 	client   docker.Client
 	log      io.Writer
 	// boxes are the containers looked at by HostPath and ContainerPath, once
-	// per Project and run: `baton ls` asks for every Session.
+	// per Project and boxTTL: `baton ls` asks for every Session.
 	boxes map[projectname.Name]inspected
 }
 
@@ -135,8 +136,73 @@ func expandHome(dir, home string) string {
 	return dir
 }
 
-// Alive is built with ticket 18; until then no Process can be judged, the
-// Sessions keep the status their Events give, and the caller says so once.
-func (*Runtime) Alive(_ context.Context, procs []runtimebus.Process) ([]runtimebus.Liveness, error) {
-	return make([]runtimebus.Liveness, len(procs)), errors.New("compose sessions are not checked for being lost yet")
+// Alive asks Docker, as the sandbox does (runtimebus.AliveInContainers): a
+// Process is gone with its container, or when its PID in the container no
+// longer runs or has another start time.
+//
+// A container is found by the id its hook recorded, else by a host name that is
+// an id. Compose can also give a service a host name of its own (`hostname:`),
+// which names no container, and an Event written before the hook recorded ids
+// has no id; such a Process is matched to the Project's service container, only
+// when all of this holds, and left unjudged otherwise:
+//
+//   - the Event's host name is the container's configured host name (docker
+//     inspect), which is never empty: it is the short id unless set;
+//   - the Event is not older than the container: one written before it was
+//     created came from an earlier container of the service, which `docker
+//     compose up` replaced (the host name is the same, the id is not), so its
+//     Session is gone. A recreate that happens while an Agent still writes is
+//     the one thing this cannot tell apart; it takes the milliseconds between
+//     the new container's creation and the old one's stop.
+//
+// Inspecting the container costs a `docker compose ps` and a `docker inspect`
+// per Project that has such a Process, once per call; never an exec.
+func (r *Runtime) Alive(ctx context.Context, procs []runtimebus.Process) ([]runtimebus.Liveness, error) {
+	asked := slices.Clone(procs)
+	out := make([]runtimebus.Liveness, len(procs))
+	var errs []error
+	boxes := make(map[projectname.Name]inspected)
+	for i, p := range procs {
+		if p.NamesContainer() || p.Host == "" || p.Project == (projectname.Name{}) {
+			continue
+		}
+		got, seen := boxes[p.Project]
+		if !seen {
+			got = r.lookup(ctx, p.Project)
+			boxes[p.Project] = got
+			if got.err != nil {
+				errs = append(errs, got.err)
+			}
+		}
+		switch {
+		case got.err != nil || got.box.ID == "" || got.box.Hostname != p.Host:
+			// Unknown: some other container, or none, wrote this.
+		case p.Seen.Before(got.box.Created):
+			out[i] = runtimebus.ProcessGone
+		default:
+			asked[i].Container = got.box.ID
+		}
+	}
+
+	verdicts, err := runtimebus.AliveInContainers(ctx, r.client, asked)
+	for i, v := range verdicts {
+		if out[i] == runtimebus.ProcessUnknown {
+			out[i] = v
+		}
+	}
+	return out, errors.Join(append(errs, err)...)
+}
+
+// lookup finds the Project's service container for Alive; a service with none
+// is a box without an id, not an error.
+func (r *Runtime) lookup(ctx context.Context, name projectname.Name) inspected {
+	svc, err := r.service(ctx, name)
+	if err != nil {
+		return inspected{err: err}
+	}
+	box, ok, err := svc.find(ctx, r.client)
+	if err != nil || !ok {
+		return inspected{err: err}
+	}
+	return inspected{box: box}
 }
