@@ -22,8 +22,8 @@ A single Go binary, `baton`, with no stateful Daemon. All state lives in files u
 - The Agents' own hooks call `baton hook <agent>`, which only appends the raw Event to the Session's Event file. Session statuses are derived from Events.
 - `baton new` starts a Session of either Agent in either Runtime in a named Guake tab, attached to a Task.
 - `baton ls` lists all Sessions with live statuses, including Sessions I started by hand.
-- `baton watch`, a stateless Daemon under `systemd --user`, sends desktop notifications, or one-way Telegram messages while I am away, and marks dead Sessions `lost`.
-- `baton handoff` plus a `/handoff` skill let a new Session of any Agent or Profile continue a Task without manual copying.
+- `baton watch`, a stateless Daemon under `systemd --user`, sends desktop notifications, or one-way Telegram messages while I am away, including when a Session becomes `lost`.
+- `baton handoff` plus a `/baton-handoff` skill let a new Session of any Agent or Profile continue a Task without manual copying.
 
 ## User Stories
 
@@ -42,14 +42,14 @@ A single Go binary, `baton`, with no stateful Daemon. All state lives in files u
 11. As a user, I want `baton sync` to target host Profiles and the Profiles inside each sandbox Project's `.ai-sandbox/home`, so that Codex in the sandbox gets the same content as Claude on the host.
 12. As a user, I want `baton sync` to never write files tracked by git, so that team repositories are never touched.
 13. As a user, I want `baton sync` to remember every file it created and to update or delete only those, so that Claude's own `skills/synced/`, my existing work skills and third-party installs survive.
-14. As a user, I want `baton sync` to stop with a clear error when a foreign file is in its way, so that it never overwrites something it does not own.
+14. As a user, I want `baton sync`, before it first adds its part to a file or directory it does not own (`CLAUDE.md`, `settings.json`, the MCP configuration, a skill with the same name), to show me the diff, ask, and back it up, and to stop with a clear error when it cannot ask, so that it never silently changes something it does not own.
 15. As a user, I want removing an item from the source to remove it from Profiles on the next sync, so that Profiles do not accumulate stale content.
 16. As a user, I want `baton sync` inside the sandbox to write only content (instructions, skills, MCP, status hooks) and leave security settings (permissions, `sandbox_mode`, network) to `ai-sandbox`, so that the sandbox's security model stays intact.
 17. As a user, I want sandbox Codex instructions and MCP servers to survive `run.sh` regenerating `config.toml` and `AGENTS.md` on every start, so that synced content is not silently lost.
 
 ### Projects, Working copies and Tasks
 
-18. As a user, I want a Project to be registered automatically the first time I run `baton new` in a git repository, so that there is no setup step.
+18. As a user, I want a Project to be registered automatically the first time I run `baton new` in a git repository or Baton sees a Session there, so that there is no setup step.
 19. As a user, I want a Project's default Runtime to be `sandbox` when it has `.ai-sandbox/run.sh` and `host` otherwise, so that Baton matches how I already work.
 20. As a user, I want `baton new <project>` without a Task name to create an unnamed Task, so that a quick question costs no ceremony.
 21. As a user, I want to name an unnamed Task later, so that it becomes a real Task once the work turns out to matter.
@@ -92,11 +92,12 @@ A single Go binary, `baton`, with no stateful Daemon. All state lives in files u
 49. As a user, I want `baton handoff <task> --to <agent>[@<profile>]` to write the automatic part of a Handoff and open a new Session whose first message points to it, so that a Task moves between Agents or Profiles with one command.
 50. As a user, I want `baton handoff` to wait, saying so, until the Task's still-active Session ends (I type `/exit` there, or its process dies) before opening the new one, so that the one-active-Session rule holds during a Handoff.
 51. As a user, I want the automatic part to contain the Task, Working copy, branch, HEAD, `git status`, `git diff --stat`, the last 10 commands with exit codes from Events, and a link to the Session's Event file, so that the receiver sees the factual state.
-52. As a user, I want a `/handoff` skill in both Agents that writes the narrative part (goal; what is done; decisions and why; rejected options and why; one concrete next step; open questions; how to verify) and saves it through `baton handoff save`, so that the reasoning survives the switch.
+52. As a user, I want a `/baton-handoff` skill in both Agents that writes the narrative part (goal; what is done; decisions and why; rejected options and why; one concrete next step; open questions; how to verify) and saves it through `baton handoff save`, so that the reasoning survives the switch.
 53. As a user, I want `baton handoff save` to find the Task from the current directory, so that the skill works the same on the host and in the sandbox without environment variables.
 54. As a user, I want the receiving Session to write the narrative part on its first turn when the handing-over Session could not (for example, its limit ran out), so that a Handoff is never only facts.
 55. As a user, I want the Handoff header to say who wrote the narrative part, so that I know how much to trust it.
 56. As a user, I want Handoffs stored under `~/.baton`, never in the Working copy, so that repositories stay clean.
+57. As a user, I want to run `/baton-handoff` before or after starting `baton handoff`, so that I do not have to remember an order.
 
 ## Implementation Decisions
 
@@ -104,22 +105,23 @@ A single Go binary, `baton`, with no stateful Daemon. All state lives in files u
 
 - One statically linked Go binary (`CGO_ENABLED=0`) provides every command: `sync`, `new`, `ls`, `watch`, `hook`, `handoff`, `handoff save`, `away`, `back`. It lives in `~/.baton/bin` so the same binary can be mounted read-only into sandboxes (the sandbox image has `python3`, `bash`, `jq`, no Go).
 - No stateful Daemon and no API in v1. Truth lives in files; `baton watch` is a stateless Daemon that reads them.
-- `baton hook <agent>` reads the hook payload from stdin, adds agent name, timestamp and host name, and appends one line to the Session's Event file under a file lock (Claude runs hooks in parallel and `PostToolUse` payloads exceed the atomic append size). No other logic.
+- `baton hook <agent> --profile <name> --runtime <host|sandbox>` (flags written by `baton sync` into each Profile's hooks) reads the hook payload from stdin and appends one line to the Session's Event file under a file lock (Claude runs hooks in parallel and `PostToolUse` payloads exceed the atomic append size). The line holds `v`, `ts`, `agent`, `profile`, `runtime`, `host` (container id in a sandbox), `agent_pid` and `agent_start` (process start time, against PID reuse), `session_id`, `event`, `cwd` and the raw `payload`. No git calls, no Project lookup, no payload interpretation.
 - All mapping from Events to statuses, notification rules and `lost` detection lives in one place in Go, shared by `baton ls` and `baton watch`.
 
 **State layout (a contract the tests rely on)**
 
 - `~/.config/baton/`: config (source repository path, Profiles and their accepted tags) and a secrets file with mode 0600.
-- `~/.baton/bin/` (the binary) and a sync manifest of owned files per Profile.
-- `~/.baton/projects/<project>/`: Project record (path, default Runtime), Task records (title, status), the current Task of each Working copy, `sessions/<session>.jsonl` with raw Events (mode 0600), `handoffs/<task>/<n>.md`. Only this directory of the Project is mounted into its sandbox.
+- `~/.baton/bin/` (the binary), a sync manifest per Profile (owned files, and owned blocks/keys in shared files), `~/.baton/backups/<profile>/<ts>/` with copies of shared files taken before sync first changed them.
+- `~/.baton/sessions/<agent>-<session>.jsonl`: raw Events of host Sessions (mode 0600), keyed by Session only.
+- `~/.baton/projects/<project>/`: Project record (path, default Runtime), Task records (title, status), `current.jsonl` (journal of the current Task per Working copy, with timestamps), `sessions/<agent>-<session>.jsonl` with raw Events of sandbox Sessions (mode 0600), `handoffs/<task>/<n>.md` and `handoffs/<task>/draft.md`. Only this directory of the Project is mounted into its sandbox.
 
 **Domain rules**
 
 - Project → Working copy → Task → Session → Event; a Session also has an Agent, a Profile and a Runtime.
 - A Session is one native conversation (one native session id).
 - At most one active Session per Working copy.
-- The current Task of a Working copy is recorded by `baton new`; a Session in a Working copy belongs to its current Task; no record → create an unnamed Task and make it current; the current Task changes only when no Session is active there.
-- A Session in a git repository Baton does not know yet registers that Project automatically by its git root.
+- The current Task of a Working copy is appended to `current.jsonl` by `baton new`; a Session belongs to the Task that was current in its Working copy at its first Event; no record → create an unnamed Task and make it current; the current Task changes only when no Session is active there.
+- Readers (`ls`, `watch`, `new`, `handoff`), not the hook, resolve Project and Working copy from the Session's `cwd` (`git rev-parse --show-toplevel`) and register an unknown Project by its git root under a lock; a name clash gets a suffix. Sessions outside git show Project `-`.
 - Task status is stored as `open` / `done` / `dropped`; activity is derived from Sessions.
 - v1 sandbox Sessions run only in the Project's main checkout (worktree paths do not resolve inside the container, and `.ai-sandbox/` is gitignored).
 
@@ -138,13 +140,16 @@ A single Go binary, `baton`, with no stateful Daemon. All state lives in files u
 - `waiting_approval` and `lost`: always. `waiting_input`: only when the turn (from `UserPromptSubmit` to `Stop`) took longer than 30 seconds.
 - Channel: desktop via `notify-send` by default; Telegram, one-way, between `baton away` and `baton back`. Messages carry status and Task name only.
 - Sent only by `baton watch` on the host, never by hooks.
+- `baton watch` keeps no state on disk in v1: at start it sends nothing, then notifies only transitions it sees; `lost` by polling the recorded PIDs and one `docker ps` per tick. Notifications while it is down are lost. A cursor file that survives restarts is v2.
 
 **Sync**
 
 - Source is a separate private git repository. Targets are Profiles only: host Profiles from config, plus Claude and Codex Profiles inside each sandbox Project's `.ai-sandbox/home`.
 - Mapping per Agent as in `DESIGN.md` D4: instructions (`AGENTS.md` → `CLAUDE.md` / `AGENTS.md`), skills (same `SKILL.md`, different directories), one MCP manifest, generated status hooks (`settings.json` for Claude, `hooks.json` for Codex).
 - Tags filter items per Profile; `${VAR}` placeholders resolved from the secrets file; a Profile receives only the secrets of items it accepts.
-- Owned-files manifest; update/delete only owned files; stop on any foreign file; never write git-tracked files.
+- Owned-files manifest; update/delete only owned files; never write git-tracked files.
+- Baton's built-in skills are named `baton-*` (`/baton-handoff`); the prefix is reserved, and a source skill named `baton-*` is an error.
+- Shared files (`CLAUDE.md`, `settings.json`, the Claude MCP configuration, Codex `hooks.json`): Baton owns only a marked block (Markdown) or named keys (JSON/TOML). First change to such a file: show the diff, ask, back up to `~/.baton/backups/`, write atomically. Later changes to Baton's own part need no question unless it was edited by hand. A foreign skill directory in the way gets the same question and backup. No terminal to ask in → stop with an error naming the path.
 - In the sandbox, Baton writes only content fragments; `ai-sandbox` owns `config.toml`/`AGENTS.md` generation and security settings.
 
 **Sandbox integration** (ADR 0001)
@@ -156,9 +161,11 @@ A single Go binary, `baton`, with no stateful Daemon. All state lives in files u
 **Handoff**
 
 - Stored under `~/.baton/projects/<project>/handoffs/<task>/<n>.md`.
-- Automatic part by `baton handoff`; narrative part by the `/handoff` skill through `baton handoff save` (stdin). The skill ships with Baton as a built-in item that `baton sync` installs into every Profile regardless of tags; it is not part of the user's source repository, Task resolved from the current directory; receiver fills the narrative part if missing; header records the author.
-- If the Task's Session is still active, `baton handoff` prints that it is waiting and blocks until that Session gets `SessionEnd` or its process dies; only then it opens the receiving Session. This keeps the one-active-Session-per-Working-copy rule.
-- The receiving Session starts with "continue the Task from Handoff `<path>`" as its first message.
+- Automatic part by `baton handoff`; narrative part by the `/baton-handoff` skill through `baton handoff save` (stdin). The skill ships with Baton as a built-in item that `baton sync` installs into every Profile regardless of tags; it is not part of the user's source repository, Task resolved from the current directory; receiver fills the narrative part if missing; header records the author.
+- If the Task's Session is still active, `baton handoff` prints that it is waiting and blocks until that Session gets `SessionEnd` or becomes `lost`. Only then it takes the automatic part (fresh git state and commands), joins it with `draft.md` if present into `<n>.md`, removes the draft and opens the receiving Session. This keeps the one-active-Session-per-Working-copy rule and makes the order of `/baton-handoff` and `baton handoff` irrelevant.
+- `baton handoff save` fills the Task's latest `<n>.md` if it has no narrative part (author: receiving), otherwise writes `draft.md` for the next Handoff (author: handing-over). Header: `narrative: handing-over | receiving | missing`. Edge accepted for v1: an unfilled Handoff receives the next `/baton-handoff`'s text.
+- A Handoff to a sandbox Agent from a Working copy other than the main checkout is refused.
+- The receiving Session starts with "continue the Task from Handoff `<path>`" as its first message, plus a request to write the narrative part when it is missing.
 
 **Terminal**
 
@@ -170,11 +177,11 @@ A single Go binary, `baton`, with no stateful Daemon. All state lives in files u
 - **External world is stubbed on `PATH`:** `guake`, `docker`, `notify-send`, `claude`, `codex` are stub executables that record their arguments. Telegram is a local HTTP server whose URL is set in the Baton config. Git is real.
 - **A good test checks external behavior only:** files in Profiles, Event files, `baton ls` output, stub invocations, HTTP requests received. Never internal function calls.
 - **Per area:**
-  - Sync: a fixture source repository with tags and `${VAR}`s → `baton sync` → Profile contents and manifest; foreign file → stop with error; git-tracked files untouched; removing a source item removes it from Profiles.
+  - Sync: a fixture source repository with tags and `${VAR}`s → `baton sync` → Profile contents and manifest; foreign shared file → diff and question (answered through a pseudo-terminal), backup, merged block; no terminal → stop with error; git-tracked files untouched; removing a source item removes it from Profiles.
   - Statuses: recorded real hook payloads from Claude Code and Codex (fixtures) piped into `baton hook <agent>` → `baton ls`. These fixtures are the guard against CLI changes; refresh them when bumping CLI versions.
-  - Watcher: start `baton watch` as a process, write Event files with chosen timestamps, assert `notify-send` stub calls and fake-Telegram requests. The 30-second rule and `lost` (a dead PID in the Events) are driven by data in Events, so no clock control or test-only flags are needed.
+  - Watcher: start `baton watch` as a process, then write Event files with chosen timestamps (Events present before the start produce nothing), assert `notify-send` stub calls and fake-Telegram requests. The 30-second rule and `lost` (a dead PID in the Events) are driven by data in Events, so no clock control or test-only flags are needed.
   - Sandbox: the fixture Project contains a real copy of `.ai-sandbox/run.sh`; the `docker` stub records arguments; assert mounts and fragments between markers. This exercises the `AI_SANDBOX_PRINT_ARGS` contract from ADR 0001.
-  - Handoff: Markdown on stdin to `baton handoff save`, then `baton handoff --to codex` → Handoff file contents and the `codex` stub's arguments. With an active Session, the `codex` stub is not invoked until the test appends a `SessionEnd` Event (or the recorded PID is dead).
+  - Handoff: Markdown on stdin to `baton handoff save` before, and in a second test after, `baton handoff --to codex` started waiting → Handoff file contents and the `codex` stub's arguments. With an active Session, the `codex` stub is not invoked until the test appends a `SessionEnd` Event (or the recorded PID is dead).
 - **Prior art:** none in `baton` yet. `ai-sandbox`'s `test/run-args.test.sh` tests `run.sh` the same way, through print-args mode without Docker.
 
 ## Out of Scope
@@ -199,6 +206,6 @@ A single Go binary, `baton`, with no stateful Daemon. All state lives in files u
 ## Further Notes
 
 - Build order follows `DESIGN.md`'s v1 plan, each stage usable on its own: (1) `baton sync`, (2) Sessions and statuses, (3) watcher and notifications, (4) Handoff.
-- Unverified facts to check at the start of the relevant stage: whether interactive `codex` accepts an initial prompt as a positional argument (Handoff); what the `NEW_TAB` argument of `guake -n` means (Terminal).
-- Not decided in the review, left to implementation: exact command names for naming a Task and setting its status; which tags sandbox Profiles accept by default.
+- Unverified facts to check at the start of the relevant stage: whether interactive `codex` accepts an initial prompt as a positional argument (Handoff); what the `NEW_TAB` argument of `guake -n` means (Terminal); whether the hook's parent process is the Agent or a shell (Sessions); whether Codex payloads use Claude's field names (Sessions); whether `PostToolUse` payloads carry exit codes (Handoff); whether Claude rewrites `.claude.json` while running (Sync); whether `run.sh` regenerates Codex `hooks.json` or skills (Sync).
+- Not decided in the review, left to implementation: exact command names for naming a Task and setting its status; which tags sandbox Profiles accept by default; how items carry tags in the source and the MCP manifest's file name and format; the command that installs the `systemd --user` unit. Each is chosen in its ticket and recorded in `DESIGN.md`.
 - tmux is being tried for a week inside Guake; its result decides the default Terminal for v2, not v1.

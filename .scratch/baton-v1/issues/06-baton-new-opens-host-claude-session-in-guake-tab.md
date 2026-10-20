@@ -6,6 +6,7 @@
 
 **Status:** ready-for-agent
 
+- [ ] Before building: check what the `NEW_TAB` argument of `guake -n` means and record it in `DESIGN.md` D8.
 - [ ] `baton new` registers the Project if it is not known yet.
 - [ ] `baton new` invokes Guake to open a new tab in the Project's Working copy with the expected title and command (verified through a `guake` stub).
 - [ ] The Profile can be chosen; the default is configurable.
