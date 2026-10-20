@@ -51,7 +51,7 @@ There is exactly one seam: the built `baton` executable, run as a subprocess aga
 - Never launch real `claude`, `codex`, `guake`, `docker run`, `notify-send` or Telegram from tests; stubs only.
 - No global installs (`go install`, `npm i -g`, `apt`, ...) without asking. Module dependencies via `go get` need a justification.
 - No production systems of any kind.
-- `baton sync` must never write a file that git tracks and must never change or delete a file that is not in its manifest (see `DESIGN.md`, D4).
+- `baton sync` must never write a file that git tracks and must never change or delete a file, block or key that is not in its manifest (see `DESIGN.md`, D4). Secret values are never printed: not in diffs, not in errors.
 
 ## Make targets
 

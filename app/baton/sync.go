@@ -19,7 +19,7 @@ func runSync(ctx context.Context, c console, home string) int {
 		return c.errorf("%v", err)
 	}
 
-	res, err := syncbus.New(syncfile.New(filepath.Join(home, ".baton")), newConfirmer(c)).Sync(ctx, cfg)
+	res, err := syncbus.New(syncfile.New(filepath.Join(home, ".baton"), filepath.Join(home, ".config", "baton", "secrets.env")), newConfirmer(c)).Sync(ctx, cfg)
 	if err != nil {
 		return c.errorf("%v", err)
 	}

@@ -25,13 +25,14 @@ import (
 // Store reads the source repository, writes Profile directories and keeps
 // the manifests in the Baton state directory.
 type Store struct {
-	batonDir string
+	batonDir    string
+	secretsPath string
 }
 
 // New creates the sync storage. batonDir is the Baton state directory
-// (~/.baton).
-func New(batonDir string) *Store {
-	return &Store{batonDir: batonDir}
+// (~/.baton); secretsPath is the secrets file (~/.config/baton/secrets.env).
+func New(batonDir, secretsPath string) *Store {
+	return &Store{batonDir: batonDir, secretsPath: secretsPath}
 }
 
 // CheckProfileDir fails unless dir is an existing directory. Sync never creates
@@ -69,6 +70,10 @@ func (s *Store) QuerySource(_ context.Context, source string) (syncbus.Source, e
 		res.Instructions = string(instructions)
 		res.HasInstructions = strings.TrimSpace(res.Instructions) != ""
 	case !os.IsNotExist(err):
+		return syncbus.Source{}, err
+	}
+
+	if res.MCP, err = readMCP(source); err != nil {
 		return syncbus.Source{}, err
 	}
 
@@ -211,6 +216,13 @@ type fileManifest struct {
 	Profile string      `json:"profile"`
 	Files   []fileOwned `json:"files"`
 	Blocks  []fileBlock `json:"blocks,omitempty"`
+	Keys    []fileKey   `json:"keys,omitempty"`
+}
+
+type fileKey struct {
+	Path   string   `json:"path"`
+	Key    []string `json:"key"`
+	SHA256 string   `json:"sha256"`
 }
 
 type fileBlock struct {
@@ -231,6 +243,9 @@ func toFileManifest(profile profilename.Name, m syncbus.Manifest) fileManifest {
 	}
 	for _, b := range m.Blocks {
 		fm.Blocks = append(fm.Blocks, fileBlock{Path: b.Path, SHA256: b.Sum})
+	}
+	for _, k := range m.Keys {
+		fm.Keys = append(fm.Keys, fileKey{Path: k.Path, Key: k.Key, SHA256: k.Sum})
 	}
 	return fm
 }
@@ -451,6 +466,14 @@ func toBusManifest(fm fileManifest) (syncbus.Manifest, error) {
 			return syncbus.Manifest{}, fmt.Errorf("path %q is not a clean relative path inside the Profile", b.Path)
 		}
 		m.Blocks = append(m.Blocks, syncbus.OwnedBlock{Path: b.Path, Sum: b.SHA256})
+	}
+	for _, k := range fm.Keys {
+		// One path may leave the Profile: ~/.claude.json, the file of the
+		// default Profile. It is only ever edited key by key, never deleted.
+		if k.Path != "../.claude.json" && (!filepath.IsLocal(k.Path) || path.Clean(k.Path) != k.Path) {
+			return syncbus.Manifest{}, fmt.Errorf("path %q is not a clean relative path inside the Profile", k.Path)
+		}
+		m.Keys = append(m.Keys, syncbus.OwnedKey{Path: k.Path, Key: k.Key, Sum: k.SHA256})
 	}
 	return m, nil
 }

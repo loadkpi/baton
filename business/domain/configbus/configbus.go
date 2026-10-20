@@ -12,6 +12,8 @@ import (
 
 // Config is the validated Baton configuration.
 type Config struct {
+	// Home is the home directory of the user.
+	Home string
 	// Source is the absolute path of the user's source repository.
 	Source string
 	// Profiles are the host Profiles, in the order of their names.

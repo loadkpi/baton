@@ -76,7 +76,7 @@ func toBusConfig(fc fileConfig, home string) (configbus.Config, error) {
 	if len(fc.Profiles) == 0 {
 		return configbus.Config{}, errors.New("no profiles configured; add a [profiles.<name>] table")
 	}
-	cfg := configbus.Config{Source: source}
+	cfg := configbus.Config{Home: home, Source: source}
 
 	names := make([]string, 0, len(fc.Profiles))
 	for name := range fc.Profiles {

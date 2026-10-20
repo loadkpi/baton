@@ -29,6 +29,8 @@ type profilePlan struct {
 	// blocksBefore are the blocks the manifest records while the files are
 	// being changed: the new ones, and those about to be taken out.
 	blocksBefore []OwnedBlock
+	// keysBefore is the same for owned keys.
+	keysBefore []OwnedKey
 	// shared are the changes to files that hold a part of Baton.
 	shared []sharedChange
 	// asks are the things sync does not own and wants to change.
@@ -69,7 +71,7 @@ func (p profilePlan) abs(rel string) string {
 }
 
 // plan decides what to do to one Profile. It reads, and writes nothing.
-func (b *Bus) plan(ctx context.Context, p configbus.Profile, source Source) (profilePlan, error) {
+func (b *Bus) plan(ctx context.Context, p configbus.Profile, home string, source Source, secrets Secrets) (profilePlan, error) {
 	previous, err := b.storer.QueryManifest(ctx, p.Name)
 	if err != nil {
 		return profilePlan{}, err
@@ -104,6 +106,9 @@ func (b *Bus) plan(ctx context.Context, p configbus.Profile, source Source) (pro
 	}
 
 	if err := b.planInstructions(ctx, &plan, previous, source); err != nil {
+		return profilePlan{}, err
+	}
+	if err := b.planMCP(ctx, &plan, home, previous, source, secrets); err != nil {
 		return profilePlan{}, err
 	}
 	return plan, nil
@@ -324,6 +329,7 @@ func (b *Bus) apply(ctx context.Context, plan profilePlan, stamp string) (Profil
 		before.Files = append(before.Files, OwnedFile{Path: rel})
 	}
 	before.Blocks = plan.blocksBefore
+	before.Keys = plan.keysBefore
 	if err := b.storer.SaveManifest(ctx, plan.profile.Name, before); err != nil {
 		return ProfileResult{}, err
 	}

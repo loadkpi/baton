@@ -36,13 +36,16 @@ type File struct {
 	Data []byte
 }
 
-// Source is what the source repository holds: the instructions and the skills.
+// Source is what the source repository holds: the instructions, the skills and
+// the MCP servers.
 type Source struct {
 	// Instructions is the content of the source's AGENTS.md; HasInstructions
 	// is false when there is none (or it is empty).
 	Instructions    string
 	HasInstructions bool
 	Skills          []Skill
+	// MCP are the servers of the source's MCP manifest.
+	MCP []MCPServer
 	// Skipped are names of directories under skills/ that are not skills
 	// because they have no SKILL.md.
 	Skipped []string
@@ -55,6 +58,20 @@ type Manifest struct {
 	Files []OwnedFile
 	// Blocks are the blocks of shared Markdown files that sync owns.
 	Blocks []OwnedBlock
+	// Keys are the named keys of shared JSON files that sync owns.
+	Keys []OwnedKey
+}
+
+// OwnedKey is a key of a shared JSON file (for example an entry of mcpServers
+// in .claude.json) that sync owns, and nothing else in the file.
+type OwnedKey struct {
+	// Path is relative to the Profile directory, slash-separated.
+	Path string
+	// Key leads from the top of the document to the key: ["mcpServers", "x"].
+	Key []string
+	// Sum is the SHA-256 (hex) of the canonical JSON of the value sync last
+	// wrote. A different value in the file means someone edited it by hand.
+	Sum string
 }
 
 // OwnedFile is a file in a Profile that sync created.
@@ -129,6 +146,9 @@ type Storer interface {
 	// repository. A source without a skills directory has no skills; it is an
 	// error if source itself is not a directory.
 	QuerySource(ctx context.Context, source string) (Source, error)
+	// QuerySecrets reads the values of ${VAR} placeholders. A missing secrets
+	// file holds no values; one that others can read is an error.
+	QuerySecrets(ctx context.Context) (Secrets, error)
 	// QueryShared reads the file at rel (slash-separated) inside a Profile
 	// directory, following a symbolic link at rel.
 	QueryShared(ctx context.Context, profileDir, rel string) (SharedFile, error)
@@ -223,6 +243,11 @@ func (b *Bus) Sync(ctx context.Context, cfg configbus.Config) (Result, error) {
 		return Result{}, fmt.Errorf("read source: %w", err)
 	}
 
+	secrets, err := b.storer.QuerySecrets(ctx)
+	if err != nil {
+		return Result{}, err
+	}
+
 	var res Result
 	for _, name := range source.Skipped {
 		res.Warnings = append(res.Warnings, fmt.Sprintf("skipped skills/%s: it has no SKILL.md", name))
@@ -230,7 +255,7 @@ func (b *Bus) Sync(ctx context.Context, cfg configbus.Config) (Result, error) {
 
 	plans := make([]profilePlan, 0, len(cfg.Profiles))
 	for _, p := range cfg.Profiles {
-		plan, err := b.plan(ctx, p, source)
+		plan, err := b.plan(ctx, p, cfg.Home, source, secrets)
 		if err != nil {
 			return Result{}, fmt.Errorf("profile %s: %w", p.Name, err)
 		}

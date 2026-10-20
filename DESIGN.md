@@ -171,7 +171,7 @@ The source is a separate private git repository (for example `~/github/my/agent-
 | --- | --- | --- | --- |
 | Instructions | `AGENTS.md` | `CLAUDE.md` in the Profile | `AGENTS.md` in the Profile (sandbox: a fragment, see below) |
 | Skills | `skills/*/SKILL.md` | `<profile>/skills/` | `.agents/skills/` or `<profile>/skills/` |
-| MCP | one manifest | Profile MCP configuration (`.claude.json` [unverified]) | `config.toml` (sandbox: a fragment) |
+| MCP | `mcp.json` | Profile MCP configuration (`.claude.json`, see [MCP and secrets](#mcp-and-secrets-ticket-04)) | `config.toml` (sandbox: a fragment) |
 | Status hooks | generated | `<profile>/settings.json` | `<profile>/hooks.json` |
 
 Rules:
@@ -212,7 +212,7 @@ tags  = ["personal"]                    # optional: the tags this Profile accept
 <source>/
   skills/<name>/SKILL.md      # a skill is a directory with SKILL.md; any other files travel with it
   AGENTS.md                   # instructions: Baton's block in CLAUDE.md; parts can carry tags (below)
-  ...                         # MCP manifest (ticket 04): name and format chosen there
+  mcp.json                    # MCP servers, with ${VAR} placeholders and optional tags (ticket 04)
 ```
 
 - A skill's whole directory is copied verbatim to `<profile dir>/skills/<name>/`, the layout Claude Code reads for user skills ([Claude Code: Skills](https://code.claude.com/docs/en/skills), checked Oct 20, 2026; that page does not say whether the directory follows `CLAUDE_CONFIG_DIR`, so this is [unverified] for relocated Profiles).
@@ -262,11 +262,50 @@ tags  = ["personal"]                    # optional: the tags this Profile accept
 - *Manifest `blocks`.* `{ "path": "CLAUDE.md", "sha256": "<hex>" }` per owned block: the checksum of the body between the markers as sync last wrote it. A body with a different checksum was edited by hand, so the next sync asks again, and so does one where the block was cut out of the file. The array is omitted when empty; `version` stays 1.
 - *Updates without a question.* The block is updated or removed silently when the file still has it and its body matches the recorded checksum. An `AGENTS.md` removed from the source takes the block out; a file that is empty afterwards (sync created it) is deleted.
 - *Symbolic links.* If a shared file is a symbolic link, sync reads and changes the file behind it and keeps the link; the git check and the backup use the file behind the link too. An empty result is written, not deleted.
-- *Not built here: JSON and TOML keys.* Ownership of named keys needs a byte-preserving editor for each format and a first user. Nothing in sync produces keys until the MCP manifest (04) and the status hooks (05), and the only test seam is the `baton` executable, so those tickets add `keys` to the manifest and the editors with their first use. The question, backup, atomic write, hand-edit check and git check in `syncbus` do not depend on the format.
+- *JSON keys.* Built with ticket 04, see [MCP and secrets](#mcp-and-secrets-ticket-04). TOML keys have no user yet: the host has only Claude Profiles, and Codex in a sandbox gets fragments (above), so a TOML editor waits for a ticket that needs one.
 - *The question.* All questions are asked before anything is written: first plan every Profile, refuse tracked files, then ask. Any answer other than `y` or `yes` (including end of input) stops sync with an error naming the path; nothing is written, backed up or recorded, not even for the things already agreed to. The prompt, with a unified diff (3 lines of context; for a replaced directory one diff per file), goes to standard error and the answer is read from standard input, so standard output keeps only results. "A terminal to ask in" means standard input and standard error are both terminals (`TCGETS`, so `/dev/null` is not one). Otherwise sync stops with `<path> is not owned by Baton and there is no terminal to ask ...` and exit code 1.
 - *Backups.* After the last yes, each thing is copied to `~/.baton/backups/<profile>/<UTC time, e.g. 20261020T101500.123Z>/<path relative to the Profile>` (directories 0700, file modes kept); a copy never overwrites an older one. The run prints `<profile>: backed up <path> to <copy>` per copy. Silent updates of Baton's own part make no backup.
 - *Git.* Before the questions, sync asks `git ls-files` (run in the nearest existing directory of each path, with `GIT_DIR` and friends removed) about every path it would write, remove or replace, and stops with `refusing to change <paths>: git tracks it` if there is any. Unchanged files are not asked about, a Profile in a repository with untracked files works, and a tracked foreign file gets this error instead of a question. Git must be installed.
 - *Atomic write.* Files, shared files and manifests are written to a temporary file in the same directory and renamed over the target.
+
+#### MCP and secrets (ticket 04)
+
+**What was checked, and what was not** (Claude Code 2.1.304; vendor docs read on Oct 20, 2026; no `claude` command other than `--help` was run).
+
+- *Verified in the docs.* User-scope MCP servers live in `~/.claude.json` ([MCP](https://code.claude.com/docs/en/mcp)). That file is "App state, OAuth, UI toggles, personal MCP servers" that Claude Code "writes back to" when settings change in `/config` or a trust prompt is approved, and it copies earlier versions to `backups/` "when Claude Code rewrites the file" ([The .claude directory](https://code.claude.com/docs/en/claude-directory)). `claude mcp add`/`add-json`/`remove`, toggling a server in `/mcp` and finishing OAuth write it too. `claude mcp add-json [options] <name> <json>` with `-s, --scope <local|user|project>` exists (`claude mcp add-json --help`).
+- *Answer to the open question, partly.* Claude **does rewrite** `.claude.json` while it is used. The docs do not say whether it re-reads the file before each write, so an edit made by sync while a Session of that Profile is open may be overwritten by Claude's next write [unverified]. Sync writes atomically and only when something changed, which makes the window small, not zero. If it turns out to bite, the cure is to run `baton sync` with no Session open in that Profile.
+- *Decision: edit the file, do not call `claude mcp add-json`.* The ticket proposes the CLI if the file is rewritten. Not done, for three reasons: `add-json` takes the whole server, secret included, as a command-line argument, which other users can read in `/proc/<pid>/cmdline` while it runs; the same shared-file flow (question, diff, backup, hand-edit check, git check) has to exist for `settings.json` hooks (ticket 05), which have no CLI; and the CLI's behavior could not be tried here (only `--help` was allowed), whereas the editor is tested at the one seam. Revisit if lost updates show up in practice.
+- *Observed, not documented.* Where `.claude.json` lives (checked by file existence only, Claude Code 2.1.304, on the author's machine): a relocated Profile used with `CLAUDE_CONFIG_DIR=<dir>` keeps it at `<dir>/.claude.json`; the default Profile, `~/.claude` used without `CLAUDE_CONFIG_DIR`, keeps it at `$HOME/.claude.json`, and `~/.claude/.claude.json` does not exist. The vendor docs say only that settings, history and plugins move with `CLAUDE_CONFIG_DIR`, and `~/.claude.json` is outside `~/.claude`. Baton's rule: a Profile whose `dir` is exactly `$HOME/.claude` uses `$HOME/.claude.json`, every other Profile uses `<dir>/.claude.json`. In the manifest the first is `"../.claude.json"` (the only path allowed to leave the Profile directory; keys are edited, the file is never deleted). Other versions may differ [unverified].
+- *Not verified.* Whether Claude expands `${VAR}` in user-scope entries (documented only for `.mcp.json`); it does not matter, because sync substitutes the values itself.
+
+**Source: `<source>/mcp.json`.** The shape of Claude's own `.mcp.json`, so the entries can be copied from `claude mcp get`/docs unchanged:
+
+```json
+{
+  "mcpServers": {
+    "tracker": {
+      "tags": ["work"],
+      "type": "http",
+      "url": "https://tracker.example/mcp",
+      "headers": { "Authorization": "Bearer ${TRACKER_TOKEN}" }
+    }
+  }
+}
+```
+
+- `tags` is Baton's: a non-empty list of tags (the tag type of ticket 03), removed before the server is written. No `tags` means every Profile. An unknown top-level member, a server that is not an object, or bad tags stop sync with an error naming `mcp.json` (and the server).
+- A placeholder is `${NAME}` (`[A-Za-z_][A-Za-z0-9_]*`) inside any string value; anything else, such as Claude's `${NAME:-default}`, is left as it is. Keys are never substituted.
+- A server is rendered as canonical JSON (keys sorted, no white space; shown indented): the source order of keys is not kept.
+
+**Secrets: `~/.config/baton/secrets.env`.** `NAME=value` lines; blank lines and lines starting with `#` are ignored; the value is everything after the first `=`, trimmed, with one pair of matching single or double quotes removed (no escapes). A line that is neither is an error naming the file and line number, never the line. A missing file holds no values. A file with any group or other permission bit makes sync refuse to run (`chmod 600 <path>`), whether or not any server uses it. A variable missing for a server a Profile accepts stops sync while planning, before anything is written, naming the variable, the server and the file. A variable used only by servers that no Profile accepts is not needed. Values are substituted per Profile, after the tags are applied, so a Profile never receives a secret of a server it does not accept.
+
+**Where it goes.** The Profile's `.claude.json` (rule above), key `mcpServers.<name>` per server. The first sync creates the file with mode 0600 (it holds secrets) and no question, as for any file that does not exist; an existing file keeps its mode, and Baton never chmods a file it does not own. If the existing file has any group or other permission bit and the servers the Profile receives contain at least one substituted secret, sync refuses before writing anything: `<path> is accessible by others (mode ...) and would receive secrets; run: chmod 600 <path>`. Servers without secrets are written into such a file as usual. Backups keep the mode and sit in 0700 directories.
+
+**What a question shows.** Not the file: `.claude.json` also holds Claude's sign-in state, and a unified diff with context would print it. The question shows only Baton's keys, as a diff of two small texts: for every key that changes, `mcpServers.<name> = <pretty JSON>` before (`(absent)` if new) and after (`(removed)` if it goes). Secrets are masked in three layers: the "after" side is the source template, so it holds `${NAME}`; on the "before" side every string sitting where the template has a placeholder is replaced by the template's text (so an older or hand-pasted token is hidden too, which matters once the secrets file was rotated); and every value in the secrets file is replaced by `${NAME}` anywhere else in what is shown. When nothing visible differs, the question says `only secret values differ in <keys>`. Errors never include secret values or the lines of the secrets file.
+
+**Manifest `keys`.** `{ "path": ".claude.json", "key": ["mcpServers", "tracker"], "sha256": "<hex>" }` per owned key, next to `files` and `blocks`; the array is omitted when empty and `version` stays 1. `sha256` is of the canonical JSON of the value as sync last wrote it, secrets substituted, so the check does not depend on formatting; the manifest is 0600. `key` is a path from the top of the document, so ticket 05 can own `hooks` entries of `settings.json` the same way. The rules are those of blocks: a key is added, updated or removed without a question while the file's value still has the recorded checksum; a key that is in the file but not recorded, or whose value differs from the record, or that was cut out by hand, is a question; one question per file, with one backup. A key removed from the source (or a tag the Profile no longer accepts) is deleted the same way. The file is never deleted by sync, and an `mcpServers` object left empty stays (`"mcpServers": {}`).
+
+**The editor: `foundation/jsonkeys`.** `Get`, `Set` and `Delete` by key path. It parses the document once to find the byte span of every value and then splices: every byte outside the span it changes stays, including key order, number spellings, escapes and white space. A new member is written like its neighbours: one per line with the neighbours' indentation, or on the same line with the neighbours' separators when the object is on one line; an empty object is opened up with the document's own indentation step; missing objects on the path are created. A document that is not valid JSON, whose top level is not an object, or whose `mcpServers` is not an object stops sync with an error naming the file. Not handled: a byte-order mark, comments (not JSON), CRLF line endings inside newly written members (they get `\n`).
 
 Slash commands, subagents and a unified permission policy (`policy.yaml`) are v2: their formats differ more between the Agents, and Codex prompts can only live at the user level.
 
@@ -361,7 +400,7 @@ Four stages; each is usable on its own.
 - [ ] Is the hook's parent process the Agent or a `sh -c` wrapper? Decides how `agent_pid` is found. Check with a stub hook that prints its parent chain under a live Agent. [unverified]
 - [ ] Do Codex hook payloads use the same field names as Claude's (`session_id`, `hook_event_name`, `cwd`)? [unverified]
 - [ ] Do `PostToolUse` payloads of both Agents carry the command's exit code? Needed for the automatic part of a Handoff (D5). [unverified]
-- [ ] Does Claude rewrite its MCP configuration (`.claude.json`) while running, so that a merge by sync can be lost? If yes, does `claude mcp add-json --scope user` with `CLAUDE_CONFIG_DIR` work instead? [unverified]
+- [ ] Does Claude rewrite its MCP configuration (`.claude.json`) while running? Yes, per the docs; whether a merge by sync can be lost is still [unverified]; the file location was observed (see [MCP and secrets](#mcp-and-secrets-ticket-04)). `claude mcp add-json --scope user` was not tried.
 - [ ] Does `run.sh` regenerate Codex `hooks.json` or the skills directory in the sandbox, as it does `config.toml` and `AGENTS.md`? [unverified]
 - [ ] tmux experiment result: does it stay as the default Terminal?
 - [ ] Shared vs per-Project sandbox Profiles in v2.
@@ -371,6 +410,7 @@ Four stages; each is usable on its own.
 
 - [Claude Code: Hooks reference](https://code.claude.com/docs/en/hooks)
 - [Codex: Hooks](https://learn.chatgpt.com/docs/hooks)
+- [Claude Code: MCP](https://code.claude.com/docs/en/mcp), [The .claude directory](https://code.claude.com/docs/en/claude-directory), [Environment variables](https://code.claude.com/docs/en/env-vars)
 - [Claude Code: Legal and compliance](https://code.claude.com/docs/en/legal-and-compliance)
 - [Use the Claude Agent SDK with your Claude plan](https://support.claude.com/en/articles/15036540-use-the-claude-agent-sdk-with-your-claude-plan)
 - [Codex: Pricing](https://developers.openai.com/codex/pricing)

@@ -11,7 +11,7 @@ Baton never replaces the Agents and never touches their tokens: it runs the vend
 
 ## Status
 
-Work in progress; v1 is being built ticket by ticket. Today only part of `baton sync` works: skills and the instructions block in `CLAUDE.md` for host Claude Profiles, filtered by tags (work content goes only to the Profiles that accept it), with an owned-files manifest, a diff-and-confirm step and backups before Baton changes anything it did not create. Everything else above is designed but not built yet.
+Work in progress; v1 is being built ticket by ticket. Today only part of `baton sync` works: skills, the instructions block in `CLAUDE.md` and MCP servers (with secrets from a local file) for host Claude Profiles, filtered by tags (work content goes only to the Profiles that accept it), with an owned-files manifest, a diff-and-confirm step and backups before Baton changes anything it did not create. MCP servers go to the Profile's `.claude.json` (`~/.claude.json` for the default `~/.claude` Profile, `<dir>/.claude.json` for the others). Sync refuses to put secrets into a file others can read. Everything else above is designed but not built yet.
 
 ## Build and test
 
@@ -37,7 +37,7 @@ dir   = "~/.claude-personal"
 tags  = ["personal"]                     # optional: tags this Profile accepts
 ```
 
-The source repository holds `skills/<name>/SKILL.md` (plus any supporting files) and `AGENTS.md` with instructions. A skill is tagged with `tags: [work]` in its front matter, a part of `AGENTS.md` by wrapping it in `<!-- baton:tags work -->` and `<!-- /baton:tags -->` lines. Untagged items go to every Profile; a tagged one only to Profiles that accept at least one of its tags. Baton records what it wrote in `~/.baton/manifests/<profile>.json` and only ever updates or deletes those files. See [DESIGN.md](DESIGN.md#config-source-and-manifest-formats) for the formats.
+The source repository holds `mcp.json` (Claude's `mcpServers` shape; a server may carry `"tags": ["work"]`), `skills/<name>/SKILL.md` (plus any supporting files) and `AGENTS.md` with instructions. A skill is tagged with `tags: [work]` in its front matter, a part of `AGENTS.md` by wrapping it in `<!-- baton:tags work -->` and `<!-- /baton:tags -->` lines. Untagged items go to every Profile; a tagged one only to Profiles that accept at least one of its tags. Secrets never go into the source: write `${VAR}` in `mcp.json` and put the values in `~/.config/baton/secrets.env` (`VAR=value` lines, mode 0600; `baton sync` refuses to run if others can read it). A Profile receives only the secrets of the servers it accepts. Baton records what it wrote in `~/.baton/manifests/<profile>.json` and only ever updates or deletes those files, blocks and keys. See [DESIGN.md](DESIGN.md#config-source-and-manifest-formats) for the formats.
 
 ## Documentation
 
