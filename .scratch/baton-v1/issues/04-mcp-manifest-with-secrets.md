@@ -13,3 +13,4 @@
 - [ ] A missing variable makes sync stop with an error naming the variable and the item; no partial file is written.
 - [ ] A secrets file readable by others makes sync refuse to run.
 - [ ] A Profile never receives a secret used only by items its tags do not accept.
+- [ ] Sync owns named keys in shared JSON/TOML files (the Claude MCP configuration, Codex `config.toml` where it applies): a `keys` array in the manifest next to `files` and `blocks`, editors that change only Baton's keys and keep every other byte, and the question/backup/hand-edit rules from 02. Moved here from 02 because this is their first user.

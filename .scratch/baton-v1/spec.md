@@ -6,7 +6,7 @@ Source of truth for decisions: `DESIGN.md` (D1–D8), `GLOSSARY.md`, `docs/adr/0
 
 ## Problem Statement
 
-I run Claude Code on the host under several Profiles (`~/.claude`, `~/.claude-personal`, `~/.claude-work`) and Codex only inside the per-project `ai-sandbox` container, where every Project has its own login and history. Every Agent × Profile × Project is a separate world:
+I run Claude Code on the host under several Profiles (`~/.claude`, `~/.claude-personal`, `~/.claude-work`) and Codex only inside the per-project `ai-sandbox` container, where every Project has its own login and history. Some Projects also have their own long-lived Docker Compose dev container with the application, and I run Claude Code and Codex inside it too, with their Profiles in Docker volumes. Every Agent × Profile × Project is a separate world:
 
 - I maintain instructions, skills, MCP servers and hooks by hand in several formats and places; skills already arrive from three different sources.
 - I cannot see which Sessions are working, which wait for my approval, and which handed the turn back to me, so I keep switching Guake tabs to check.
@@ -18,7 +18,7 @@ I run Claude Code on the host under several Profiles (`~/.claude`, `~/.claude-pe
 
 A single Go binary, `baton`, with no stateful Daemon. All state lives in files under `~/.baton` and `~/.config/baton`.
 
-- `baton sync` renders one private source repository of instructions, skills, MCP servers and status hooks into every Profile, on the host and inside each Project's sandbox, filtered by tags, with secrets substituted from a local file.
+- `baton sync` renders one private source repository of instructions, skills, MCP servers and status hooks into every Profile, on the host, inside each Project's sandbox and inside Projects' compose dev containers, filtered by tags, with secrets substituted from a local file.
 - The Agents' own hooks call `baton hook <agent>`, which only appends the raw Event to the Session's Event file. Session statuses are derived from Events.
 - `baton new` starts a Session of either Agent in either Runtime in a named Guake tab, attached to a Task.
 - `baton ls` lists all Sessions with live statuses, including Sessions I started by hand.
@@ -99,13 +99,22 @@ A single Go binary, `baton`, with no stateful Daemon. All state lives in files u
 56. As a user, I want Handoffs stored under `~/.baton`, never in the Working copy, so that repositories stay clean.
 57. As a user, I want to run `/baton-handoff` before or after starting `baton handoff`, so that I do not have to remember an order.
 
+### Compose Runtime
+
+58. As a user, I want to declare that a Project's Agents run in a service of the Project's own Docker Compose setup (compose files and service name in my Baton config), so that Baton treats that dev container as a third Runtime, `compose`.
+59. As a user, I want `baton sync` to render content into the Profiles inside that container, including Profiles that live in named Docker volumes shared by several Compose setups, so that the dev container gets the same instructions, skills, MCP servers and status hooks as the host.
+60. As a user, I want Baton to never edit the Project's Compose files, and to tell me exactly which mounts to add to my untracked override file when the container lacks Baton's mounts, so that team files stay untouched.
+61. As a user, I want `baton new` to open a Guake tab that starts the service if needed and runs the Agent in it with `docker compose exec` in the Project's directory inside the container, so that Sessions in the dev container are tied to Tasks like any other.
+62. As a user, I want paths inside the container mapped back to host paths from the container's mounts, so that Sessions in the dev container land in the right Project, Working copy and Task, and count for the one-active-Session rule together with host Sessions in the same checkout.
+63. As a user, I want a Session whose Agent process died inside a container that is still running to show `lost`, so that a long-lived dev container does not hide crashed Sessions.
+
 ## Implementation Decisions
 
 **Shape**
 
 - One statically linked Go binary (`CGO_ENABLED=0`) provides every command: `sync`, `new`, `ls`, `watch`, `hook`, `handoff`, `handoff save`, `away`, `back`. It lives in `~/.baton/bin` so the same binary can be mounted read-only into sandboxes (the sandbox image has `python3`, `bash`, `jq`, no Go).
 - No stateful Daemon and no API in v1. Truth lives in files; `baton watch` is a stateless Daemon that reads them.
-- `baton hook <agent> --profile <name> --runtime <host|sandbox>` (flags written by `baton sync` into each Profile's hooks) reads the hook payload from stdin and appends one line to the Session's Event file under a file lock (Claude runs hooks in parallel and `PostToolUse` payloads exceed the atomic append size). The line holds `v`, `ts`, `agent`, `profile`, `runtime`, `host` (container id in a sandbox), `agent_pid` and `agent_start` (process start time, against PID reuse), `session_id`, `event`, `cwd` and the raw `payload`. No git calls, no Project lookup, no payload interpretation.
+- `baton hook <agent> --profile <name> --runtime <host|sandbox|compose>` (flags written by `baton sync` into each Profile's hooks) reads the hook payload from stdin and appends one line to the Session's Event file under a file lock (Claude runs hooks in parallel and `PostToolUse` payloads exceed the atomic append size). The line holds `v`, `ts`, `agent`, `profile`, `runtime`, `host` (container id in a sandbox), `agent_pid` and `agent_start` (process start time, against PID reuse), `session_id`, `event`, `cwd` and the raw `payload`. No git calls, no Project lookup, no payload interpretation.
 - All mapping from Events to statuses, notification rules and `lost` detection lives in one place in Go, shared by `baton ls` and `baton watch`.
 
 **State layout (a contract the tests rely on)**
@@ -123,7 +132,14 @@ A single Go binary, `baton`, with no stateful Daemon. All state lives in files u
 - The current Task of a Working copy is appended to `current.jsonl` by `baton new`; a Session belongs to the Task that was current in its Working copy at its first Event; no record → create an unnamed Task and make it current; the current Task changes only when no Session is active there.
 - Readers (`ls`, `watch`, `new`, `handoff`), not the hook, resolve Project and Working copy from the Session's `cwd` (`git rev-parse --show-toplevel`) and register an unknown Project by its git root under a lock; a name clash gets a suffix. Sessions outside git show Project `-`.
 - Task status is stored as `open` / `done` / `dropped`; activity is derived from Sessions.
-- v1 sandbox Sessions run only in the Project's main checkout (worktree paths do not resolve inside the container, and `.ai-sandbox/` is gitignored).
+- v1 sandbox and compose Sessions run only in the Project's main checkout (worktree paths do not resolve inside a container, and `.ai-sandbox/` is gitignored).
+
+**Runtimes**
+
+- A Runtime is a replaceable part of the code with one interface: how to start an Agent in it, where its Profiles are and how to write into them, how to map a path inside it to a host path, and whether a Session's Agent process is still alive. `host`, `sandbox` and `compose` implement it; ticket 08 introduces the interface and later Runtimes plug in without changing the callers.
+- Paths from Events (`cwd`) of container Runtimes are mapped to host paths through the container's mounts (`docker inspect`), never by assuming the paths are equal.
+- Liveness in container Runtimes: the container is gone, or it runs but the recorded `agent_pid` (in the container's PID namespace) is gone or has another start time, checked with one `docker exec` per running container per check.
+- `compose`: configured per Project in the Baton config (Compose files, service, the Agents' Profiles inside it with their tags). The Project's Compose files know nothing about Baton, the same principle as ADR 0001: Baton never edits them, checks its two mounts (`~/.baton/projects/<project>` read-write, `~/.baton/bin` read-only) with `docker inspect`, and when they are missing prints the snippet for the user's untracked override file and refuses to start. Profiles inside the container are full Profiles (no fragment treatment); Baton writes into them through Docker, since named volumes are not writable from the host. A Profile in a volume shared by several Compose setups is one Profile, synced once.
 
 **Status derivation** (hook names checked against both vendors' docs on Oct 20, 2026)
 
@@ -133,7 +149,7 @@ A single Go binary, `baton`, with no stateful Daemon. All state lives in files u
 | `waiting_approval` | `PermissionRequest` | `PermissionRequest` |
 | `waiting_input` | `SessionStart`, `Stop` | `SessionStart`, `Stop`, `Interrupt` |
 | `ended` | `SessionEnd` | `SessionEnd` |
-| `lost` | process or container gone without `SessionEnd` | same |
+| `lost` | process gone (inside its container, for container Runtimes) or container gone, without `SessionEnd` | same |
 
 **Notifications**
 
@@ -181,6 +197,7 @@ A single Go binary, `baton`, with no stateful Daemon. All state lives in files u
   - Statuses: recorded real hook payloads from Claude Code and Codex (fixtures) piped into `baton hook <agent>` → `baton ls`. These fixtures are the guard against CLI changes; refresh them when bumping CLI versions.
   - Watcher: start `baton watch` as a process, then write Event files with chosen timestamps (Events present before the start produce nothing), assert `notify-send` stub calls and fake-Telegram requests. The 30-second rule and `lost` (a dead PID in the Events) are driven by data in Events, so no clock control or test-only flags are needed.
   - Sandbox: the fixture Project contains a real copy of `.ai-sandbox/run.sh`; the `docker` stub records arguments; assert mounts and fragments between markers. This exercises the `AI_SANDBOX_PRINT_ARGS` contract from ADR 0001.
+  - Compose: a fixture Project with a Compose file; the `docker` stub answers `docker inspect` (mounts, state) and `docker exec` (PID checks) from fixtures and records every call; assert synced Profile contents as written through the stub, the printed override snippet when mounts are missing, the `docker compose exec` arguments of `baton new`, path mapping in `baton ls`, and `lost` for a dead PID in a running container.
   - Handoff: Markdown on stdin to `baton handoff save` before, and in a second test after, `baton handoff --to codex` started waiting → Handoff file contents and the `codex` stub's arguments. With an active Session, the `codex` stub is not invoked until the test appends a `SessionEnd` Event (or the recorded PID is dead).
 - **Prior art:** none in `baton` yet. `ai-sandbox`'s `test/run-args.test.sh` tests `run.sh` the same way, through print-args mode without Docker.
 
@@ -205,7 +222,8 @@ A single Go binary, `baton`, with no stateful Daemon. All state lives in files u
 
 ## Further Notes
 
-- Build order follows `DESIGN.md`'s v1 plan, each stage usable on its own: (1) `baton sync`, (2) Sessions and statuses, (3) watcher and notifications, (4) Handoff.
+- Build order follows `DESIGN.md`'s v1 plan, each stage usable on its own: (1) `baton sync`, (2) Sessions and statuses, (3) watcher and notifications, (4) Handoff, (5) the `compose` Runtime (tickets 16–18), built on the Runtime interface from tickets 08–11.
+- Unverified facts for the `compose` Runtime: how to write into a Profile in a named volume (`docker cp` into a running container, `docker compose exec` with a tar stream, or a short-lived `docker run` with the volume; ownership and UID inside the container); whether an Agent inside a container sees the `ANTHROPIC_API_KEY`/OpenAI key of the container's environment and how `docker compose exec` can unset them; whether the hook's `agent_pid` inside a container is the Agent or a shell.
 - Unverified facts to check at the start of the relevant stage: whether interactive `codex` accepts an initial prompt as a positional argument (Handoff); what the `NEW_TAB` argument of `guake -n` means (Terminal); whether the hook's parent process is the Agent or a shell (Sessions); whether Codex payloads use Claude's field names (Sessions); whether `PostToolUse` payloads carry exit codes (Handoff); whether Claude rewrites `.claude.json` while running (Sync); whether `run.sh` regenerates Codex `hooks.json` or skills (Sync).
 - Not decided in the review, left to implementation: exact command names for naming a Task and setting its status; which tags sandbox Profiles accept by default; how items carry tags in the source and the MCP manifest's file name and format; the command that installs the `systemd --user` unit. Each is chosen in its ticket and recorded in `DESIGN.md`.
 - tmux is being tried for a week inside Guake; its result decides the default Terminal for v2, not v1.

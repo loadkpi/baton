@@ -15,7 +15,7 @@ A helper worker inside an Agent. Baton does not model it and only sees it throug
 _Avoid_: agent (in this sense)
 
 **Profile**:
-An Agent's config directory with its own login, history and limits, e.g. `claude-personal`, `claude-work`, or `codex` inside a specific project's sandbox.
+An Agent's config directory with its own login, history and limits, e.g. `claude-personal`, `claude-work`, `codex` inside a specific project's sandbox, or `claude` inside a project's dev container.
 _Avoid_: account, config, CLAUDE_CONFIG_DIR
 
 **Daemon**:
@@ -29,7 +29,7 @@ A git repository that Baton knows about. A Project has Working copies and Tasks.
 _Avoid_: repo, workspace
 
 **Runtime**:
-Where an Agent runs: on the host (`host`) or in the project's sandbox (`sandbox`).
+Where an Agent runs: on the host (`host`), in the project's `ai-sandbox` container started for the Session (`sandbox`), or in a long-lived service of the project's own Docker Compose setup, such as a dev container with the application (`compose`).
 _Avoid_: environment, Docker, container
 
 **Working copy**:

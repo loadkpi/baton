@@ -6,7 +6,7 @@
 
 **Status:** ready-for-agent
 
-- [ ] `baton sync` adds status hooks to `settings.json` of every host Claude Profile through the shared-file flow from 02, for the Events in the status table; each hook calls `baton hook claude --profile <name> --runtime host`.
+- [ ] `baton sync` adds status hooks to `settings.json` of every host Claude Profile through the shared-file flow from 02 and the JSON key ownership from 04, for the Events in the status table; each hook calls `baton hook claude --profile <name> --runtime host`.
 - [ ] `baton hook <agent>` reads the payload from stdin and appends exactly one line to `~/.baton/sessions/<agent>-<session_id>.jsonl` under a file lock, with `v`, `ts`, `agent`, `profile`, `runtime`, `host`, `agent_pid`, `agent_start`, `session_id`, `event`, `cwd` and the raw `payload`. Concurrent hooks with payloads larger than the atomic append size never interleave.
 - [ ] The hook does not call git, look up Projects or interpret the payload.
 - [ ] `agent_pid` is the Agent's process, not a shell between it and the hook. Check the parent chain under a live Claude first and record what was found in `DESIGN.md`. `agent_start` is that process's start time from `/proc/<pid>/stat`.

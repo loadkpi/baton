@@ -6,6 +6,7 @@
 
 **Status:** ready-for-agent
 
+- [ ] Introduces the Runtime interface from the spec (start an Agent, locate and write Profiles, map a container path to a host path, check that a Session's Agent is alive); `host` and `sandbox` implement it, sync and later commands go through it, and the `compose` Runtime (16–18) can plug in without changing callers. Only the parts this ticket uses are implemented; the rest of the interface is declared and filled in by 09 and 11.
 - [ ] Every registered Project with Runtime `sandbox` contributes its Claude and Codex Profiles as sync targets, with their own accepted tags; their default tags are chosen here and recorded in `DESIGN.md` D4.
 - [ ] Claude in the sandbox gets instructions, skills, MCP servers and status hooks like a host Profile.
 - [ ] Codex in the sandbox gets skills and status hooks directly, and instructions and MCP servers only as fragments.

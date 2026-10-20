@@ -13,3 +13,4 @@
 - [ ] Baton's hooks inside a container without the Baton mount do nothing and exit successfully.
 - [ ] A Claude Session in the sandbox appears in `baton ls` with Runtime `sandbox` and live status.
 - [ ] Sandbox Sessions run only in the Project's main checkout.
+- [ ] Paths from sandbox Events (`cwd` inside the container) are mapped to host paths through the container's mounts as recorded by `docker inspect` (or the arguments Baton passed to `docker run`), behind the Runtime interface from 08, never by assuming the paths are equal; the Session resolves to the right Project and Working copy in `baton ls`.

@@ -21,8 +21,8 @@ What hurts today:
 
 **Goals for v1**
 
-1. One source of instructions, skills, MCP servers and hooks, rendered into every Profile on the host and in project sandboxes (`baton sync`).
-2. Start Sessions of either Agent in either Runtime (`host`, `sandbox`) in a named Guake tab.
+1. One source of instructions, skills, MCP servers and hooks, rendered into every Profile on the host, in project sandboxes and in projects' Compose dev containers (`baton sync`).
+2. Start Sessions of either Agent in any Runtime (`host`, `sandbox`, `compose`) in a named Guake tab.
 3. A live list of Sessions and their statuses across all Profiles and Projects (`baton ls`), including Sessions started by hand outside Baton.
 4. Desktop notifications when an Agent waits for approval or for input; one-way Telegram messages while you are away.
 5. Manual Handoff of a Task from one Session to another, across Agents and Profiles.
@@ -90,8 +90,8 @@ flowchart LR
   watch --> notify[notify-send<br/>Telegram]
 ```
 
-- **`baton hook <agent> --profile <name> --runtime <host|sandbox>`** is the only thing Agents call. `baton sync` writes the flags into each Profile's hook definitions, because it knows which Profile it renders; no environment variables are involved. The hook reads the payload from stdin and appends one line to the Session's Event file under a file lock: schema version `v`, `ts`, `agent`, `profile`, `runtime`, `host` (the container id inside a sandbox), `agent_pid` and `agent_start` (the Agent's process and its start time from `/proc/<pid>/stat`, so a reused PID never makes a dead Session look alive), `session_id`, `event` and `cwd` copied from the payload, and the raw `payload`. It does not call git, resolve the Project or interpret the payload, so it is fast enough even for Codex's 1-second `SessionEnd` budget.
-- **Where Events go.** On the host: `~/.baton/sessions/<agent>-<session_id>.jsonl`, keyed by the Session only. In a sandbox: the mounted `~/.baton/projects/<project>/sessions/`, where the Project is known. Readers (`ls`, `watch`, `new`, `handoff`) resolve Project, Working copy and Task from `cwd` and register unknown Projects (D1).
+- **`baton hook <agent> --profile <name> --runtime <host|sandbox|compose>`** is the only thing Agents call. `baton sync` writes the flags into each Profile's hook definitions, because it knows which Profile it renders; no environment variables are involved. The hook reads the payload from stdin and appends one line to the Session's Event file under a file lock: schema version `v`, `ts`, `agent`, `profile`, `runtime`, `host` (the container id inside a container Runtime), `agent_pid` and `agent_start` (the Agent's process and its start time from `/proc/<pid>/stat`, so a reused PID never makes a dead Session look alive), `session_id`, `event` and `cwd` copied from the payload, and the raw `payload`. It does not call git, resolve the Project or interpret the payload, so it is fast enough even for Codex's 1-second `SessionEnd` budget.
+- **Where Events go.** On the host: `~/.baton/sessions/<agent>-<session_id>.jsonl`, keyed by the Session only. In a sandbox or a Compose container: the mounted `~/.baton/projects/<project>/sessions/`, where the Project is known. Readers (`ls`, `watch`, `new`, `handoff`) resolve Project, Working copy and Task from `cwd` and register unknown Projects (D1).
 - **`baton ls`** and **`baton watch`** derive Session statuses from Events. `baton watch` is a stateless Daemon under `systemd --user` that sends notifications (D6). `lost` is always computed on read, so neither command depends on the other. If it is down, Sessions and `baton ls` keep working; you only lose notifications.
 - **One Go binary** (`CGO_ENABLED=0`) in `~/.baton/bin` provides all commands. The sandbox image has `python3`, `bash` and `jq` but no Go; the static binary is mounted read-only, so the same code runs on both sides.
 - A Daemon with an API, state and push updates arrives in v2 with the web dashboard.
@@ -143,7 +143,7 @@ Five statuses, all derived from the last Event. Hook names below were checked ag
 
 The first draft also had `starting`, `idle`, `done` and `failed`. `idle` is the same as `waiting_input`; "done" belongs to the Task (D1); `starting` cannot be observed reliably; `failed` returns in v2 with headless Sessions. Codex has no "waiting for input" hook, which is why `Stop` is the common signal.
 
-### D3. Runtimes: host and sandbox
+### D3. Runtimes: host, sandbox and compose
 
 The `sandbox` Runtime is `ai-sandbox`, not a custom image. `ai-sandbox` knows nothing about Baton ([ADR 0001](docs/adr/0001-ai-sandbox-knows-nothing-about-baton.md)): Baton uses generic mechanisms that make sense without it (extra mounts, config fragments), or wraps `run.sh` through `AI_SANDBOX_PRINT_ARGS`.
 
@@ -152,6 +152,16 @@ The `sandbox` Runtime is `ai-sandbox`, not a custom image. `ai-sandbox` knows no
 - Two directories are mounted into the sandbox: `~/.baton/projects/<project>` read-write and `~/.baton/bin` read-only. Nothing else from `~/.baton`, so a sandbox never sees other Projects.
 - **v1 sandbox Sessions run only in the main checkout.** A git worktree stores the absolute host path to `.git/worktrees/<name>`, which does not exist inside the container (the Project is mounted at `/workspace`), and `.ai-sandbox/` is gitignored, so a worktree has no sandbox at all. The one-active-Session rule (D1) makes this safe.
 - Codex in every sandbox asks once to trust user hooks (`/hooks`). Baton does not bypass that review; `baton ls` shows "no events, check `/hooks`" for a Codex Session that reports nothing.
+
+**A Runtime is a replaceable part** with one interface: start an Agent in it, locate and write its Profiles, map a path inside it to a host path, and tell whether a Session's Agent is still alive. Paths inside containers are never assumed equal to host paths: they are mapped through the container's mounts (`docker inspect`). In container Runtimes a Session is alive while its container runs and its `agent_pid` (in the container's PID namespace, with the same start time) still runs there, checked with one `docker exec` per running container.
+
+**`compose`** is a long-lived service of the Project's own Docker Compose setup with the Agents installed, typically a dev container with the application. It differs from `sandbox` in three ways: the container outlives Sessions (Agents are started with `docker compose exec`), its Profiles often live in named volumes that several Compose setups share, and nothing regenerates their configs, so they are full Profiles.
+
+- Configured per Project in the Baton config: Compose files, service, and the Profiles inside the container with their tags.
+- The Project's Compose files know nothing about Baton, as `ai-sandbox` does not (ADR 0001). Baton never edits them; it checks its two mounts with `docker inspect` and, when they are missing, prints the snippet for the user's untracked override file. Adding mounts needs one recreate of the container, so the user picks the moment.
+- Baton writes Profiles through Docker (into the running service, or through a one-shot container with the volume when it is stopped), resolves the real config directory inside the container instead of trusting documentation, and depends on no tools in the image.
+- Compose Sessions run only in the main checkout, like sandbox Sessions.
+- Lessons from an earlier shell-based attempt at the same setup: hooks written to the volume root instead of the symlinked config subdirectory never ran; status by timestamps alone left crashed Sessions looking alive for a day; a registry inside the volume avoided recreating the container but had to be read through Docker on every poll.
 
 ### D4. One source for instructions, skills, MCP and hooks (`baton sync`)
 
@@ -305,6 +315,8 @@ Four stages; each is usable on its own.
    - Done when an approval request from Codex in the sandbox produces a desktop notification, and a Telegram message after `baton away`.
 4. **Handoff.** `baton handoff`, the `/baton-handoff` skill, `baton handoff save`, start of the receiving Session with the Handoff as its first message.
    - Done when a Task started in Claude continues in Codex with one command and no manual copying.
+5. **Compose Runtime.** Sync into Profiles inside a Project's Compose dev container, `baton new` and `baton ls` there, `lost` for an Agent that died in a running container, Handoff to and from it.
+   - Done when a Task moves from a host Claude Session to Claude in the dev container with one command, and killing that Agent inside the running container produces a `lost` notification.
 
 ## v2 and later
 
