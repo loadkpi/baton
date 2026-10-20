@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/loadkpi/baton/business/domain/configbus"
 	"github.com/loadkpi/baton/business/domain/handoffbus"
 	"github.com/loadkpi/baton/business/domain/handoffbus/stores/handofffile"
 	"github.com/loadkpi/baton/business/domain/projectbus"
@@ -35,7 +36,7 @@ func runHandoffSave(ctx context.Context, c console, home string, args []string) 
 		return c.errorf("handoff save: %v", err)
 	}
 
-	saved, err := newHandoffSaver(home).Save(ctx, dir, string(text))
+	saved, err := newHandoffSaver(home, readerConfig(ctx, c, home)).Save(ctx, dir, string(text))
 	if err != nil {
 		return c.errorf("handoff save: %v", err)
 	}
@@ -47,7 +48,7 @@ func runHandoffSave(ctx context.Context, c console, home string, args []string) 
 // mounted (the container root is the one variable the tests of the sandbox
 // set, see containerRootVar), it is a sandbox: the stores are those of the
 // mounted directory. Otherwise it is the host.
-func newHandoffSaver(home string) *handoffbus.Saver {
+func newHandoffSaver(home string, cfg configbus.Config) *handoffbus.Saver {
 	mount := filepath.Join(os.Getenv(containerRootVar), runtimesandbox.ContainerProject)
 	if info, err := os.Stat(mount); err == nil && info.IsDir() {
 		return handoffbus.NewMountedSaver(
@@ -59,9 +60,9 @@ func newHandoffSaver(home string) *handoffbus.Saver {
 	batonDir := filepath.Join(home, ".baton")
 	return handoffbus.NewSaver(
 		handofffile.New(batonDir),
-		projectbus.New(projectfile.New(batonDir)),
+		newProjects(home, cfg),
 		taskbus.New(taskfile.New(batonDir)),
-		newWorkBus(batonDir),
+		newWorkBus(home, cfg),
 	)
 }
 

@@ -1,5 +1,5 @@
 // Command dockerfake plays the few parts of docker that Baton uses to reach
-// the files of a Compose service: `compose ps`, `compose exec`, `inspect`,
+// the files of a Compose service: `compose ps`, `compose exec`, `compose up -d`, `inspect`,
 // `volume inspect`, `cp` and `run -v`. The containers' file systems are
 // directories of the host; the first argument is a JSON file that lists them
 // (see internal/batontest/compose.go, which writes it).
@@ -48,8 +48,9 @@ type volume struct {
 }
 
 type bind struct {
-	Source string `json:"source"`
-	Dest   string `json:"dest"`
+	Source   string `json:"source"`
+	Dest     string `json:"dest"`
+	ReadOnly bool   `json:"read_only"`
 }
 
 func main() {
@@ -67,7 +68,7 @@ func main() {
 	args := os.Args[2:]
 	switch args[0] {
 	case "compose":
-		compose(st, args[1:])
+		compose(os.Args[1], st, args[1:])
 	case "inspect":
 		inspect(st, args[len(args)-1])
 	case "volume":
@@ -105,8 +106,9 @@ func (st state) byID(id string) (container, bool) {
 	return container{}, false
 }
 
-// compose handles `-f FILE ... ps -a -q SERVICE` and `... exec -T SERVICE ARGV`.
-func compose(st state, args []string) {
+// compose handles `-f FILE ... ps -a -q SERVICE`, `... up -d SERVICE` and
+// `... exec [-T] [-w DIR] SERVICE ARGV`.
+func compose(statePath string, st state, args []string) {
 	for len(args) >= 2 && (args[0] == "-f" || args[0] == "-p" || args[0] == "--project-directory") {
 		args = args[2:]
 	}
@@ -131,19 +133,71 @@ func compose(st state, args []string) {
 				fmt.Println(c.ID)
 			}
 		}
+	case "up":
+		up(statePath, st, args[1:])
 	case "exec":
 		rest := args[1:]
-		if len(rest) < 3 || rest[0] != "-T" {
-			fail(1, "dockerfake: compose exec: want -T SERVICE COMMAND")
+		dir := ""
+		for len(rest) > 0 && strings.HasPrefix(rest[0], "-") {
+			switch rest[0] {
+			case "-T":
+				rest = rest[1:]
+			case "-w":
+				if len(rest) < 2 {
+					fail(1, "dockerfake: compose exec: -w needs a directory")
+				}
+				dir, rest = rest[1], rest[2:]
+			default:
+				fail(1, "dockerfake: compose exec: unsupported flag %q", rest[0])
+			}
 		}
-		found := st.byService(rest[1])
+		if len(rest) < 2 {
+			fail(1, "dockerfake: compose exec: want SERVICE COMMAND")
+		}
+		found := st.byService(rest[0])
 		if len(found) == 0 || !found[0].Running {
-			fail(1, "service %q is not running", rest[1])
+			fail(1, "service %q is not running", rest[0])
 		}
 		c := found[0]
-		execIn(c, c.Root, rest[2:], []string{"HOME=" + c.Root + c.Home})
+		execIn(c, dir, rest[1:])
 	default:
 		fail(1, "dockerfake: compose: unsupported subcommand %q", args[0])
+	}
+}
+
+// up handles `up -d SERVICE`: the service's container runs afterwards. The new
+// state is written back, for the calls that follow.
+func up(statePath string, st state, args []string) {
+	detached := false
+	var svc string
+	for _, a := range args {
+		switch a {
+		case "-d":
+			detached = true
+		case "--force-recreate":
+			fail(1, "dockerfake: compose up: --force-recreate is not played")
+		default:
+			svc = a
+		}
+	}
+	if !detached || svc == "" {
+		fail(1, "dockerfake: compose up: want -d SERVICE")
+	}
+	found := false
+	for i := range st.Containers {
+		if st.Containers[i].Service == svc {
+			st.Containers[i].Running, found = true, true
+		}
+	}
+	if !found {
+		fail(1, "no such service: %s", svc)
+	}
+	data, err := json.Marshal(st)
+	if err != nil {
+		fail(2, "dockerfake: %v", err)
+	}
+	if err := os.WriteFile(statePath, data, 0o644); err != nil {
+		fail(2, "dockerfake: %v", err)
 	}
 }
 
@@ -152,13 +206,16 @@ func inspect(st state, id string) {
 	if !ok {
 		fail(1, "Error: No such container: %s", id)
 	}
-	type mount struct{ Type, Name, Source, Destination string }
+	type mount struct {
+		Type, Name, Source, Destination string
+		RW                              bool
+	}
 	var mounts []mount
 	for _, v := range c.Volumes {
-		mounts = append(mounts, mount{"volume", v.Name, "/var/lib/docker/volumes/" + v.Name + "/_data", v.Dest})
+		mounts = append(mounts, mount{"volume", v.Name, "/var/lib/docker/volumes/" + v.Name + "/_data", v.Dest, true})
 	}
 	for _, b := range c.Binds {
-		mounts = append(mounts, mount{"bind", "", b.Source, b.Dest})
+		mounts = append(mounts, mount{"bind", "", b.Source, b.Dest, !b.ReadOnly})
 	}
 	doc := []map[string]any{{
 		"Id":     c.ID,
@@ -262,17 +319,26 @@ func run(st state, args []string) {
 	os.Exit(code)
 }
 
-// execIn runs argv with every absolute path argument moved under root.
-func execIn(c container, root string, argv, env []string) {
+// execIn runs argv in dir (the container's default, its root, when empty) with
+// every absolute path argument moved under the container's root. Like docker,
+// the process gets the environment the container was created with, plus HOME,
+// and nothing of the caller's; PATH and TMPDIR of the host stay so that the
+// host's tools run.
+func execIn(c container, dir string, argv []string) {
 	cmd := make([]string, len(argv))
 	for i, a := range argv {
 		cmd[i] = a
 		if strings.HasPrefix(a, "/") {
-			cmd[i] = root + a
+			cmd[i] = c.Root + a
 		}
 	}
 	e := exec.Command(cmd[0], cmd[1:]...)
-	e.Env = append(os.Environ(), env...)
+	e.Dir = c.Root + dir
+	if dir == "" {
+		e.Dir = c.Root
+	}
+	env := append([]string{"PATH=" + os.Getenv("PATH"), "TMPDIR=" + os.Getenv("TMPDIR")}, c.Env...)
+	e.Env = append(env, "HOME="+c.Root+c.Home)
 	e.Stdin, e.Stderr = os.Stdin, os.Stderr
 	var out bytes.Buffer
 	e.Stdout = &out

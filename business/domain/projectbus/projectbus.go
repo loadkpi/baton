@@ -23,8 +23,10 @@ type Project struct {
 	// Path is the git root of the main checkout. The worktrees of the
 	// repository are Working copies of the same Project.
 	Path string
-	// Runtime is the default Runtime: sandbox if the Project has
-	// .ai-sandbox/run.sh, host otherwise.
+	// Runtime is the default Runtime: compose if the Project has a Compose
+	// service in the config, else sandbox if it has .ai-sandbox/run.sh, host
+	// otherwise. The record holds only the last two; the config is applied
+	// by the Bus (WithDefaultRuntime).
 	Runtime runtime.Runtime
 }
 
@@ -56,12 +58,31 @@ type Storer interface {
 
 // Bus is the Project domain.
 type Bus struct {
-	storer Storer
+	storer   Storer
+	override func(projectname.Name, runtime.Runtime) runtime.Runtime
 }
 
 // New creates the Project domain over a storage.
 func New(storer Storer) *Bus {
 	return &Bus{storer: storer}
+}
+
+// WithDefaultRuntime makes every Project this Bus returns carry the Runtime
+// that f gives for its name and the Runtime found when it was registered. It is
+// the one place where the user's configuration overrides the record (a Project
+// with a Compose service runs there, whatever was found), so that every reader
+// sees the same Runtime. The record itself is not rewritten.
+func (b *Bus) WithDefaultRuntime(f func(projectname.Name, runtime.Runtime) runtime.Runtime) *Bus {
+	b.override = f
+	return b
+}
+
+// configured applies the override of WithDefaultRuntime.
+func (b *Bus) configured(p Project) Project {
+	if b.override != nil {
+		p.Runtime = b.override(p.Name, p.Runtime)
+	}
+	return p
 }
 
 // Resolve returns where a directory is: its Working copy and the Project that
@@ -76,7 +97,7 @@ func (b *Bus) Resolve(ctx context.Context, dir string) (place Place, ok bool, er
 	if err != nil {
 		return Place{}, false, err
 	}
-	return Place{Project: p, WorkingCopy: workingCopy}, true, nil
+	return Place{Project: b.configured(p), WorkingCopy: workingCopy}, true, nil
 }
 
 // register returns the Project whose main checkout is at root, creating its
@@ -125,7 +146,11 @@ func (b *Bus) register(ctx context.Context, root string) (Project, error) {
 
 // All returns every registered Project.
 func (b *Bus) All(ctx context.Context) ([]Project, error) {
-	return b.storer.QueryAll(ctx)
+	all, err := b.storer.QueryAll(ctx)
+	for i := range all {
+		all[i] = b.configured(all[i])
+	}
+	return all, err
 }
 
 // Named returns the registered Project with the name.
@@ -140,7 +165,7 @@ func (b *Bus) Named(ctx context.Context, ref string) (Project, error) {
 	}
 	for _, p := range known {
 		if p.Name == name {
-			return p, nil
+			return b.configured(p), nil
 		}
 	}
 	return Project{}, fmt.Errorf("unknown project %q; pass the path of a git repository to register it", ref)

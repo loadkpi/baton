@@ -19,8 +19,6 @@ import (
 	"github.com/loadkpi/baton/business/domain/handoffbus/stores/handofffile"
 	"github.com/loadkpi/baton/business/domain/launchbus"
 	"github.com/loadkpi/baton/business/domain/launchbus/stores/launchguake"
-	"github.com/loadkpi/baton/business/domain/projectbus"
-	"github.com/loadkpi/baton/business/domain/projectbus/stores/projectfile"
 	"github.com/loadkpi/baton/business/domain/sessionbus"
 	"github.com/loadkpi/baton/business/domain/sessionbus/stores/sessionfile"
 	"github.com/loadkpi/baton/business/domain/sessionbus/stores/sessionproc"
@@ -63,12 +61,11 @@ func runHandoff(ctx context.Context, c console, home string, args []string) int 
 	if err != nil {
 		return c.usagef("handoff: %v (%s)", err, handoffUsage)
 	}
-	configPath := filepath.Join(home, ".config", "baton", "config.toml")
-	if req.Config, err = configbus.New(configfile.New(configPath, home)).Load(ctx); err != nil {
+	if req.Config, err = configbus.New(configfile.New(configPath(home), home)).Load(ctx); err != nil {
 		return c.errorf("%v", err)
 	}
 
-	bus := newHandoffBus(home, c.stderr)
+	bus := newHandoffBus(home, req.Config, c.stderr)
 
 	// While the command waits, Ctrl-C (or a SIGTERM) ends it with nothing
 	// written and nothing started. Past the wait the default is back: the
@@ -179,11 +176,10 @@ func toBusHandoffRequest(home string, a handoffArgs) (handoffbus.Request, error)
 
 // newHandoffBus wires the Handoff domain over the files under home. The
 // receiving Session is started by the same domain as `baton new`.
-func newHandoffBus(home string, log io.Writer) *handoffbus.Bus {
+func newHandoffBus(home string, cfg configbus.Config, log io.Writer) *handoffbus.Bus {
 	batonDir := filepath.Join(home, ".baton")
-	work := newWorkBus(batonDir)
-	sessions := sessionbus.New(sessionfile.New(batonDir), sessionproc.New()).WithRuntimes(runtimes(batonDir))
-	projects := projectbus.New(projectfile.New(batonDir))
-	launch := launchbus.New(launchguake.New(), work, sessions, startable(batonDir, log))
-	return handoffbus.New(handofffile.New(batonDir), work, projects, taskbus.New(taskfile.New(batonDir)), sessions, launch, runtimes(batonDir), handoffInterval)
+	work := newWorkBus(home, cfg)
+	sessions := sessionbus.New(sessionfile.New(batonDir), sessionproc.New()).WithRuntimes(runtimes(home, cfg))
+	launch := launchbus.New(launchguake.New(), work, sessions, startable(home, cfg, log))
+	return handoffbus.New(handofffile.New(batonDir), work, newProjects(home, cfg), taskbus.New(taskfile.New(batonDir)), sessions, launch, runtimes(home, cfg), handoffInterval)
 }

@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"path/filepath"
 	"sort"
 	"strings"
 	"text/tabwriter"
@@ -23,9 +22,8 @@ func runLs(ctx context.Context, c console, home string, args []string) int {
 	if len(args) != 0 {
 		return c.usagef("ls takes no arguments")
 	}
-	batonDir := filepath.Join(home, ".baton")
 
-	listing, err := newWorkBus(batonDir).List(ctx)
+	listing, err := newWorkBus(home, readerConfig(ctx, c, home)).List(ctx)
 	if err != nil {
 		return c.errorf("%v", err)
 	}

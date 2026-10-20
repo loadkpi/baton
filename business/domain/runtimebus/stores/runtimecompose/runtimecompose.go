@@ -4,7 +4,9 @@ package runtimecompose
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io"
 	"path"
 	"path/filepath"
 	"strings"
@@ -27,12 +29,25 @@ type Projects interface {
 // Runtime is the Compose service of the Projects that configure one.
 type Runtime struct {
 	projects Projects
+	cfg      configbus.Config
 	client   docker.Client
+	log      io.Writer
+	// boxes are the containers looked at by HostPath and ContainerPath, once
+	// per Project and run: `baton ls` asks for every Session.
+	boxes map[projectname.Name]inspected
 }
 
-// New creates the compose Runtime over the registered Projects.
-func New(projects Projects) *Runtime {
-	return &Runtime{projects: projects}
+// New creates the compose Runtime over the registered Projects. cfg says which
+// Projects have a service and where; Targets takes its own.
+func New(projects Projects, cfg configbus.Config) *Runtime {
+	return &Runtime{projects: projects, cfg: cfg, log: io.Discard, boxes: make(map[projectname.Name]inspected)}
+}
+
+// WithLog sends what a start has to say to the user (the service coming up,
+// the output of docker compose up) to w, which is discarded by default.
+func (r *Runtime) WithLog(w io.Writer) *Runtime {
+	r.log = w
+	return r
 }
 
 var _ runtimebus.Runtime = (*Runtime)(nil)
@@ -120,22 +135,8 @@ func expandHome(dir, home string) string {
 	return dir
 }
 
-// Start is built with ticket 17.
-func (*Runtime) Start(context.Context, runtimebus.StartRequest) (runtimebus.Tab, error) {
-	return runtimebus.Tab{}, runtimebus.ErrNotImplemented
-}
-
-// HostPath is built with ticket 17.
-func (*Runtime) HostPath(context.Context, projectname.Name, string) (string, error) {
-	return "", runtimebus.ErrNotImplemented
-}
-
-// ContainerPath is built with ticket 17.
-func (*Runtime) ContainerPath(context.Context, projectname.Name, string) (string, error) {
-	return "", runtimebus.ErrNotImplemented
-}
-
-// Alive is built with ticket 18; until then no Process can be judged.
+// Alive is built with ticket 18; until then no Process can be judged, the
+// Sessions keep the status their Events give, and the caller says so once.
 func (*Runtime) Alive(_ context.Context, procs []runtimebus.Process) ([]runtimebus.Liveness, error) {
-	return make([]runtimebus.Liveness, len(procs)), runtimebus.ErrNotImplemented
+	return make([]runtimebus.Liveness, len(procs)), errors.New("compose sessions are not checked for being lost yet")
 }

@@ -587,25 +587,6 @@ func TestComposeSync_AVolumeThatIsGoneFailsTheProfileNamingProjectAndService(t *
 	}
 }
 
-func TestComposeSync_AProjectWithAComposeServiceRunsThereByDefault(t *testing.T) {
-	env := newEnv(t)
-	env.MakeProfileDir(".claude-personal")
-	env.WriteConfig(composeConfig(env, ""))
-	repo := composeProject(t, env, "app")
-
-	res := env.Run("new", repo, "--agent", "claude")
-
-	if res.ExitCode == 0 {
-		t.Fatalf("exit code = 0, want the compose Runtime to be refused until it can start; stdout=%q", res.Stdout)
-	}
-	if !strings.Contains(res.Stderr, "project app runs in the compose Runtime") {
-		t.Errorf("stderr = %q, want it to say the Project runs in the compose Runtime", res.Stderr)
-	}
-	if len(env.Calls("guake")) != 0 {
-		t.Error("a tab was opened on the host for a Project that runs in compose")
-	}
-}
-
 func TestComposeConfig_MistakesStopBatonWithAMessageNamingTheKey(t *testing.T) {
 	cases := []struct{ name, extra, want string }{
 		{"no service", "[projects.x.compose]\nfiles = [\"c.yml\"]\n[projects.x.compose.profiles.c]\nagent = \"claude\"\ndir = \"/c\"\n", "projects.x.compose: service is required"},

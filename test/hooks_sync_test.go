@@ -551,3 +551,30 @@ func TestHooksSync_TheRestartNoteComesAgainOnlyForAProfileThatGetsHooksForTheFir
 		t.Errorf("stdout =\n%s\nwant the note for claude-work only", res.Stdout)
 	}
 }
+
+func TestHooksSync_TheRestartNoteIsGivenForProfilesInSandboxAndComposeToo(t *testing.T) {
+	env := newEnv(t)
+	env.MakeProfileDir(".claude-personal")
+	env.WriteConfig(composeConfig(env, ""))
+	sandboxProject(t, env, "box")
+	composeProject(t, env, "app")
+	devContainer(env, true)
+
+	first := env.Run("sync")
+
+	if first.ExitCode != 0 {
+		t.Fatalf("exit code = %d, stderr=%q", first.ExitCode, first.Stderr)
+	}
+	for _, profile := range []string{"claude-personal", "box.claude", "box.codex", "app.claude"} {
+		want := profile + ": status hooks installed; Sessions of this Profile that are already running keep their old hooks and must be restarted to report Events"
+		if !strings.Contains(first.Stdout, want) {
+			t.Errorf("stdout lacks %q:\n%s", want, first.Stdout)
+		}
+	}
+
+	second := env.Run("sync")
+
+	if strings.Contains(second.Stdout, "status hooks installed") {
+		t.Errorf("a later sync repeats the note:\n%s", second.Stdout)
+	}
+}

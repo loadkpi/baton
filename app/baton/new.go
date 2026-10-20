@@ -17,6 +17,7 @@ import (
 	"github.com/loadkpi/baton/business/domain/projectbus"
 	"github.com/loadkpi/baton/business/domain/projectbus/stores/projectfile"
 	"github.com/loadkpi/baton/business/domain/runtimebus"
+	"github.com/loadkpi/baton/business/domain/runtimebus/stores/runtimecompose"
 	"github.com/loadkpi/baton/business/domain/runtimebus/stores/runtimehost"
 	"github.com/loadkpi/baton/business/domain/runtimebus/stores/runtimesandbox"
 	"github.com/loadkpi/baton/business/domain/sessionbus"
@@ -58,17 +59,14 @@ func runNew(ctx context.Context, c console, home string, args []string) int {
 		return c.usagef("new: --profile: %v", err)
 	}
 
-	configPath := filepath.Join(home, ".config", "baton", "config.toml")
-	cfg, err := configbus.New(configfile.New(configPath, home)).Load(ctx)
+	cfg, err := configbus.New(configfile.New(configPath(home), home)).Load(ctx)
 	if err != nil {
 		return c.errorf("%v", err)
 	}
-	place, err := findPlace(ctx, home, parsed.project)
+	place, err := findPlace(ctx, newProjects(home, cfg), parsed.project)
 	if err != nil {
 		return c.errorf("%v", err)
 	}
-	// A Project with a Compose service in the config runs there by default.
-	place.Project.Runtime = cfg.DefaultRuntime(place.Project.Name, place.Project.Runtime)
 
 	// The Profile of a host Session is chosen from the config; the Profiles
 	// inside a sandbox are the Project's own (<project>.<agent>) and are not.
@@ -80,19 +78,22 @@ func runNew(ctx context.Context, c console, home string, args []string) int {
 	req := launchbus.Request{Home: home, Place: place, Task: task, Agent: a, Profile: profile}
 	batonDir := filepath.Join(home, ".baton")
 	sessions := sessionbus.New(sessionfile.New(batonDir), sessionproc.New())
-	if err := launchbus.New(launchguake.New(), newWorkBus(batonDir), sessions, startable(batonDir, c.stderr)).Start(ctx, req); err != nil {
+	if err := launchbus.New(launchguake.New(), newWorkBus(home, cfg), sessions, startable(home, cfg, c.stderr)).Start(ctx, req); err != nil {
 		return c.errorf("%v", err)
 	}
 	return exitOK
 }
 
-// startable are the Runtimes that can start an Agent. The sandbox says what it
-// is doing (building an image can take minutes) on log.
-func startable(batonDir string, log io.Writer) map[runtime.Runtime]runtimebus.Runtime {
+// startable are the Runtimes that can start an Agent. The sandbox and compose
+// Runtimes say what they are doing (building an image or bringing a service up
+// can take minutes) on log.
+func startable(home string, cfg configbus.Config, log io.Writer) map[runtime.Runtime]runtimebus.Runtime {
+	batonDir := filepath.Join(home, ".baton")
 	projects := projectbus.New(projectfile.New(batonDir))
 	return map[runtime.Runtime]runtimebus.Runtime{
 		runtime.Host:    runtimehost.New(),
 		runtime.Sandbox: runtimesandbox.New(projects, batonDir).WithLog(log),
+		runtime.Compose: runtimecompose.New(projects, cfg).WithLog(log),
 	}
 }
 
@@ -155,8 +156,7 @@ func toBusProfileChoice(s string) (profilename.Name, error) {
 // inside a git repository means the Working copy that holds it, a git worktree
 // included, and registers the repository as a Project when Baton does not know
 // it yet.
-func findPlace(ctx context.Context, home, ref string) (projectbus.Place, error) {
-	projects := projectbus.New(projectfile.New(filepath.Join(home, ".baton")))
+func findPlace(ctx context.Context, projects *projectbus.Bus, ref string) (projectbus.Place, error) {
 	if !isPath(ref) {
 		p, err := projects.Named(ctx, ref)
 		return projectbus.Place{Project: p, WorkingCopy: p.Path}, err

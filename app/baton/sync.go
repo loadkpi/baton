@@ -30,7 +30,7 @@ func runSync(ctx context.Context, c console, home string) int {
 	var warnings []string
 	batonDir := filepath.Join(home, ".baton")
 	projects := projectbus.New(projectfile.New(batonDir))
-	for _, rt := range []runtimebus.Runtime{runtimehost.New(), runtimesandbox.New(projects, batonDir), runtimecompose.New(projects)} {
+	for _, rt := range []runtimebus.Runtime{runtimehost.New(), runtimesandbox.New(projects, batonDir), runtimecompose.New(projects, cfg)} {
 		t, w, err := rt.Targets(ctx, cfg)
 		if err != nil {
 			return c.errorf("%s Runtime: %v", rt.Name(), err)

@@ -22,8 +22,14 @@ type ContainerSpec struct {
 	Home string
 	// Volumes are the named volumes it mounts, by name, at their paths.
 	Volumes map[string]string
-	// Binds are host directories it mounts, by host path, at their paths.
+	// Binds are host directories it mounts read-write, by host path, at
+	// their paths.
 	Binds map[string]string
+	// BindsRO are host directories it mounts read-only.
+	BindsRO map[string]string
+	// Env is the environment the container was created with, as "NAME=value".
+	// Every `compose exec` starts with it, and with nothing of the caller's.
+	Env []string
 }
 
 // Container is the fake file system of a container. It is a directory of the
@@ -61,14 +67,16 @@ type fakeVolume struct {
 }
 
 type fakeBind struct {
-	Source string `json:"source"`
-	Dest   string `json:"dest"`
+	Source   string `json:"source"`
+	Dest     string `json:"dest"`
+	ReadOnly bool   `json:"read_only"`
 }
 
 // AddContainer adds a container to the fake docker of the Env and installs
 // it as the `docker` stub, which keeps recording every call. The fake plays
-// `compose ps`, `compose exec`, `inspect`, `volume inspect`, `cp` and `run -v`
-// against the container's directory (see dockerfake); anything else fails.
+// `compose ps`, `compose exec`, `compose up -d`, `inspect`, `volume inspect`,
+// `cp` and `run -v` against the container's directory (see dockerfake);
+// anything else fails.
 func (e *Env) AddContainer(spec ContainerSpec) *Container {
 	e.t.Helper()
 	if spec.Image == "" {
@@ -91,6 +99,9 @@ func (e *Env) AddContainer(spec ContainerSpec) *Container {
 	for _, dest := range spec.Binds {
 		c.MkdirAll(dest)
 	}
+	for _, dest := range spec.BindsRO {
+		c.MkdirAll(dest)
+	}
 	e.containers = append(e.containers, c)
 	e.writeFakeDocker()
 	return c
@@ -100,12 +111,15 @@ func (e *Env) writeFakeDocker() {
 	e.t.Helper()
 	st := fakeState{MissingVolumes: e.missingVolumes}
 	for _, c := range e.containers {
-		fc := fakeContainer{ID: c.id, Service: c.spec.Service, Running: c.spec.Running, User: c.spec.User, Image: c.spec.Image, Home: c.spec.Home, Root: c.root}
+		fc := fakeContainer{ID: c.id, Service: c.spec.Service, Running: c.spec.Running, User: c.spec.User, Image: c.spec.Image, Home: c.spec.Home, Root: c.root, Env: c.spec.Env}
 		for name, dest := range c.spec.Volumes {
 			fc.Volumes = append(fc.Volumes, fakeVolume{Name: name, Dest: dest})
 		}
 		for src, dest := range c.spec.Binds {
 			fc.Binds = append(fc.Binds, fakeBind{Source: src, Dest: dest})
+		}
+		for src, dest := range c.spec.BindsRO {
+			fc.Binds = append(fc.Binds, fakeBind{Source: src, Dest: dest, ReadOnly: true})
 		}
 		st.Containers = append(st.Containers, fc)
 	}

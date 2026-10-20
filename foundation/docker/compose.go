@@ -52,6 +52,28 @@ func (c Compose) Exec(ctx context.Context, stdin io.Reader, argv ...string) ([]b
 	return c.Client.exec(ctx, streamTimeout, stdin, append(args, argv...)...)
 }
 
+// Up runs `docker compose up -d <service>`: it creates the service's container
+// when there is none and starts it when it is stopped. Compose recreates a
+// container only when the service's definition changed, which a Compose file
+// that was edited since the container was made can cause; Up never asks for it
+// (no --force-recreate) and never stops a running container. What docker
+// prints goes to log, because creating a container can take a while (an image
+// to pull). There is no time limit but ctx.
+func (c Compose) Up(ctx context.Context, log io.Writer) error {
+	cmd := exec.CommandContext(ctx, c.Client.binary(), append(c.base(), "up", "-d", c.Service)...)
+	cmd.Stdout, cmd.Stderr = log, log
+	if err := cmd.Run(); err != nil {
+		// What docker said is in log already.
+		e := &Error{Command: "compose up", Err: err}
+		var exit *exec.ExitError
+		if errors.As(err, &exit) {
+			e.Code = exit.ExitCode()
+		}
+		return e
+	}
+	return nil
+}
+
 // Mount is one mount of a container.
 type Mount struct {
 	// Type is "volume", "bind", "tmpfs", ...
@@ -63,6 +85,8 @@ type Mount struct {
 	Source string
 	// Destination is the path inside the container.
 	Destination string
+	// ReadWrite is false for a mount that is read-only inside the container.
+	ReadWrite bool
 }
 
 // Container is what `docker inspect` says about a container.
@@ -101,6 +125,7 @@ func (c Client) Inspect(ctx context.Context, container string) (Container, error
 			Name        string
 			Source      string
 			Destination string
+			RW          bool
 		}
 	}
 	if err := json.Unmarshal(out, &docs); err != nil {
@@ -115,7 +140,7 @@ func (c Client) Inspect(ctx context.Context, container string) (Container, error
 		got.Image = d.Image
 	}
 	for _, m := range d.Mounts {
-		got.Mounts = append(got.Mounts, Mount{Type: m.Type, Name: m.Name, Source: m.Source, Destination: m.Destination})
+		got.Mounts = append(got.Mounts, Mount{Type: m.Type, Name: m.Name, Source: m.Source, Destination: m.Destination, ReadWrite: m.RW})
 	}
 	return got, nil
 }

@@ -5,6 +5,7 @@ package launchbus
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/loadkpi/baton/business/domain/configbus"
@@ -50,8 +51,7 @@ type Bus struct {
 
 // New creates the domain over a Terminal, the domain that decides the Task, the
 // Sessions (where launches are remembered) and the Runtimes that can start an
-// Agent. A Project whose Runtime is not among them (compose, until ticket 17) is
-// refused.
+// Agent. A Project whose Runtime is not among them is refused.
 func New(terminal Terminal, work *workbus.Bus, sessions *sessionbus.Bus, runtimes map[runtime.Runtime]runtimebus.Runtime) *Bus {
 	return &Bus{terminal: terminal, work: work, sessions: sessions, runtimes: runtimes}
 }
@@ -74,12 +74,15 @@ func (b *Bus) Check(r Request) error {
 	return nil
 }
 
-// SelectProfile returns the host Profile a Session of the Agent starts under
-// in the Project, from the user's choice (the zero value for none), or the zero
-// Profile for a Project whose Runtime has Profiles of its own. It refuses what
-// cannot run: Codex on the host, and a choice of Profile in a sandbox.
+// SelectProfile returns the Profile a Session of the Agent starts under in the
+// Project, from the user's choice (the zero value for none): a host Profile on
+// the host, one of the Project's Profiles in its Compose service, and the zero
+// Profile for a sandbox, whose Profiles are its own. It refuses what cannot
+// run: Codex on the host or in Compose, and a choice of Profile in a sandbox.
 func SelectProfile(cfg configbus.Config, project projectbus.Project, a agent.Agent, chosen profilename.Name) (configbus.Profile, error) {
 	switch {
+	case project.Runtime == runtime.Compose:
+		return selectComposeProfile(cfg, project, a, chosen)
 	case project.Runtime == runtime.Host:
 		if a == agent.Codex {
 			return configbus.Profile{}, fmt.Errorf("project %s runs in the %s Runtime; %s runs only in a sandbox (a Project with .ai-sandbox/run.sh)", project.Name, project.Runtime, a)
@@ -89,6 +92,43 @@ func SelectProfile(cfg configbus.Config, project projectbus.Project, a agent.Age
 		return configbus.Profile{}, fmt.Errorf("project %s runs in the %s Runtime, which has Profiles of its own; --profile applies to host Sessions only", project.Name, project.Runtime)
 	}
 	return configbus.Profile{}, nil
+}
+
+// selectComposeProfile picks among the Claude Profiles inside the Project's
+// service: the chosen one, else the only one. The config's default_profile is
+// a host Profile and does not apply.
+func selectComposeProfile(cfg configbus.Config, project projectbus.Project, a agent.Agent, chosen profilename.Name) (configbus.Profile, error) {
+	if a != agent.Claude {
+		return configbus.Profile{}, fmt.Errorf("project %s runs in the %s Runtime; %s does not run in a compose container yet (ticket 19), only claude does", project.Name, project.Runtime, a)
+	}
+	settings := cfg.ComposeOf(project.Name)
+	if settings == nil {
+		return configbus.Profile{}, fmt.Errorf("project %s runs in the %s Runtime but the config has no [projects.%s.compose] table", project.Name, project.Runtime, project.Name)
+	}
+	var candidates []configbus.Profile
+	for _, p := range settings.Profiles {
+		if p.Agent == a {
+			candidates = append(candidates, p)
+		}
+	}
+	var names []string
+	for _, p := range candidates {
+		names = append(names, p.Name.String())
+	}
+	switch {
+	case chosen != (profilename.Name{}):
+		for _, p := range candidates {
+			if p.Name == chosen {
+				return p, nil
+			}
+		}
+		return configbus.Profile{}, fmt.Errorf("unknown profile %q (%s profiles in the %s service of project %s: %s)", chosen, a, project.Runtime, project.Name, strings.Join(names, ", "))
+	case len(candidates) == 1:
+		return candidates[0], nil
+	case len(candidates) == 0:
+		return configbus.Profile{}, fmt.Errorf("project %s has no %s profile in its compose service", project.Name, a)
+	}
+	return configbus.Profile{}, fmt.Errorf("several %s profiles in the compose service of project %s (%s); choose one with --profile", a, project.Name, strings.Join(names, ", "))
 }
 
 // Start makes the Task of the request the current one of the Working copy and

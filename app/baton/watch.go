@@ -13,8 +13,7 @@ import (
 
 	"github.com/loadkpi/baton/business/domain/awaybus"
 	"github.com/loadkpi/baton/business/domain/awaybus/stores/awayfile"
-	"github.com/loadkpi/baton/business/domain/projectbus"
-	"github.com/loadkpi/baton/business/domain/projectbus/stores/projectfile"
+	"github.com/loadkpi/baton/business/domain/configbus"
 	"github.com/loadkpi/baton/business/domain/sessionbus"
 	"github.com/loadkpi/baton/business/domain/sessionbus/stores/sessionfile"
 	"github.com/loadkpi/baton/business/domain/sessionbus/stores/sessionproc"
@@ -73,7 +72,7 @@ func runWatch(ctx context.Context, c console, home string, args []string) int {
 	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	bus := newWatchBus(home)
+	bus := newWatchBus(home, readerConfig(ctx, c, home))
 	warned := warnings{c: c}
 	n, ws, err := bus.Start(ctx)
 	if err != nil {
@@ -118,11 +117,11 @@ func (w *warnings) show(ws []string) {
 
 // newWatchBus wires the watching domain over the files under home. The desktop
 // is the channel, and Telegram takes over while `baton away` is in force.
-func newWatchBus(home string) *watchbus.Bus {
+func newWatchBus(home string, cfg configbus.Config) *watchbus.Bus {
 	batonDir := filepath.Join(home, ".baton")
-	rts := runtimes(batonDir)
+	rts := runtimes(home, cfg)
 	sessions := sessionbus.New(sessionfile.New(batonDir), sessionproc.New()).WithRuntimes(rts)
-	work := workbus.New(sessions, projectbus.New(projectfile.New(batonDir)), taskbus.New(taskfile.New(batonDir)), rts)
+	work := workbus.New(sessions, newProjects(home, cfg), taskbus.New(taskfile.New(batonDir)), rts)
 	away := awaybus.New(awayfile.New(batonDir))
 	return watchbus.New(sessions, work, watchbus.NewRouter(notifysend.New(), telegram.New(telegramSource(home)), away))
 }
