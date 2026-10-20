@@ -7,8 +7,14 @@ import (
 
 	"github.com/loadkpi/baton/business/domain/configbus"
 	"github.com/loadkpi/baton/business/domain/configbus/stores/configfile"
+	"github.com/loadkpi/baton/business/domain/projectbus"
+	"github.com/loadkpi/baton/business/domain/projectbus/stores/projectfile"
+	"github.com/loadkpi/baton/business/domain/runtimebus"
+	"github.com/loadkpi/baton/business/domain/runtimebus/stores/runtimehost"
+	"github.com/loadkpi/baton/business/domain/runtimebus/stores/runtimesandbox"
 	"github.com/loadkpi/baton/business/domain/syncbus"
 	"github.com/loadkpi/baton/business/domain/syncbus/stores/syncfile"
+	"github.com/loadkpi/baton/business/types/agent"
 )
 
 // runSync implements `baton sync`.
@@ -19,10 +25,22 @@ func runSync(ctx context.Context, c console, home string) int {
 		return c.errorf("%v", err)
 	}
 
-	res, err := syncbus.New(syncfile.New(filepath.Join(home, ".baton"), filepath.Join(home, ".config", "baton", "secrets.env")), newConfirmer(c)).Sync(ctx, cfg)
+	var targets []syncbus.Target
+	var warnings []string
+	for _, rt := range []runtimebus.Runtime{runtimehost.New(), runtimesandbox.New(projectbus.New(projectfile.New(filepath.Join(home, ".baton"))))} {
+		t, w, err := rt.Targets(ctx, cfg)
+		if err != nil {
+			return c.errorf("%s Runtime: %v", rt.Name(), err)
+		}
+		targets = append(targets, t...)
+		warnings = append(warnings, w...)
+	}
+
+	res, err := syncbus.New(syncfile.New(filepath.Join(home, ".baton"), filepath.Join(home, ".config", "baton", "secrets.env")), newConfirmer(c)).Sync(ctx, cfg, targets)
 	if err != nil {
 		return c.errorf("%v", err)
 	}
+	res.Warnings = append(warnings, res.Warnings...)
 
 	for _, w := range res.Warnings {
 		c.warnf("%s", w)
@@ -43,7 +61,11 @@ func toAppSyncLines(res syncbus.Result) []string {
 		}
 		lines = append(lines, fmt.Sprintf("%s: %d files written, %d removed, %d unchanged", p.Name, p.Written, p.Removed, p.Unchanged))
 		if p.HooksFirst {
-			lines = append(lines, fmt.Sprintf("%s: status hooks installed; Sessions of this Profile that are already running keep their old hooks and must be restarted to report Events", p.Name))
+			line := fmt.Sprintf("%s: status hooks installed; Sessions of this Profile that are already running keep their old hooks and must be restarted to report Events", p.Name)
+			if p.Agent == agent.Codex {
+				line += "; Codex runs hooks only after you review and trust them with /hooks"
+			}
+			lines = append(lines, line)
 		}
 	}
 	return lines

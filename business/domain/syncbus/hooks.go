@@ -6,6 +6,8 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/loadkpi/baton/business/types/agent"
+	"github.com/loadkpi/baton/business/types/runtime"
 	"github.com/loadkpi/baton/business/types/status"
 )
 
@@ -13,15 +15,19 @@ import (
 // Profile directory.
 const settingsFile = "settings.json"
 
-// hookCommand is the command line of Baton's status hook in a host Profile.
-// The binary lives in ~/.baton/bin, the place the same file is mounted from
-// into sandboxes later (DESIGN.md).
-func hookCommand(home, profile string) string {
-	return shellWord(hookBinary(home)) + " hook claude --profile " + profile + " --runtime host"
+// codexHooksFile is where a Codex Profile keeps its hooks, relative to the
+// Profile directory.
+const codexHooksFile = "hooks.json"
+
+// hookCommand is the command line of Baton's status hook: the binary as the
+// Agent sees it, the Agent, the Profile and the Runtime it runs in.
+func hookCommand(binary string, a agent.Agent, profile string, rt runtime.Runtime) string {
+	return shellWord(binary) + " hook " + a.String() + " --profile " + profile + " --runtime " + rt.String()
 }
 
-// hookBinary is the executable the hooks call.
-func hookBinary(home string) string {
+// hostHookBinary is the executable the hooks of host Profiles call, which is
+// also the directory that is mounted read-only into sandboxes.
+func hostHookBinary(home string) string {
 	return filepath.Join(home, ".baton", "bin", "baton")
 }
 
@@ -42,13 +48,15 @@ func hookGroup(command string) map[string]any {
 	}
 }
 
-// planHooks plans Baton's status hooks in the Profile's settings.json.
+// planHooks plans Baton's status hooks in the Profile's hooks file
+// (settings.json for Claude, hooks.json for Codex).
 //
 // hooks.<Event> is an array the user's own hooks live in, so Baton owns one
 // element of it, the group with its command, and never anything else. The
 // rules of the shared file are those of planJSONKeys.
-func (b *Bus) planHooks(ctx context.Context, plan *profilePlan, home string, previous Manifest) error {
-	command := hookCommand(home, plan.profile.Name.String())
+func (b *Bus) planHooks(ctx context.Context, plan *profilePlan, previous Manifest) error {
+	file := plan.layout.hooksFile
+	command := hookCommand(plan.binary, plan.profile.Agent, plan.profile.Name.String(), plan.runtime)
 
 	var keys []wantedKey
 	for _, event := range status.HookEvents(plan.profile.Agent) {
@@ -59,7 +67,7 @@ func (b *Bus) planHooks(ctx context.Context, plan *profilePlan, home string, pre
 	// sync wants is taken out: the Profile was renamed, or Baton moved.
 	var stale []OwnedKey
 	for _, k := range previous.Keys {
-		if k.Path != settingsFile || len(k.Key) != 2 || k.Key[0] != "hooks" || k.Item == "" {
+		if k.Path != file || len(k.Key) != 2 || k.Key[0] != "hooks" || k.Item == "" {
 			continue
 		}
 		if !hasKey(keys, k) {
@@ -70,12 +78,12 @@ func (b *Bus) planHooks(ctx context.Context, plan *profilePlan, home string, pre
 	plan.hooks = len(keys) > 0
 	// The first time Baton's hooks reach a Profile, Sessions that are already
 	// running do not have them.
-	plan.hooksFirst = plan.hooks && !ownsAnyIn(previous, settingsFile)
+	plan.hooksFirst = plan.hooks && !ownsAnyIn(previous, file)
 
 	return b.planJSONKeys(ctx, plan, previous, jsonTarget{
-		rel:       settingsFile,
-		backupRel: settingsFile,
-		name:      settingsFile,
+		rel:       file,
+		backupRel: file,
+		name:      file,
 		wanted:    keys,
 		stale:     stale,
 		mode:      0o644,

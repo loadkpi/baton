@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"io/fs"
 	"os"
 	"path"
@@ -19,7 +18,6 @@ import (
 	"github.com/loadkpi/baton/business/types/tag"
 	"github.com/loadkpi/baton/foundation/atomicfile"
 	"github.com/loadkpi/baton/foundation/frontmatter"
-	"github.com/loadkpi/baton/foundation/git"
 )
 
 // Store reads the source repository, writes Profile directories and keeps
@@ -33,25 +31,6 @@ type Store struct {
 // (~/.baton); secretsPath is the secrets file (~/.config/baton/secrets.env).
 func New(batonDir, secretsPath string) *Store {
 	return &Store{batonDir: batonDir, secretsPath: secretsPath}
-}
-
-// CheckProfileDir fails unless dir is an existing directory. Sync never creates
-// a Profile directory: a mistyped path should be an error, not a new directory.
-func (s *Store) CheckProfileDir(_ context.Context, dir string) error {
-	return checkDir(dir)
-}
-
-func checkDir(dir string) error {
-	info, err := os.Stat(dir)
-	switch {
-	case os.IsNotExist(err):
-		return fmt.Errorf("directory %s does not exist", dir)
-	case err != nil:
-		return err
-	case !info.IsDir():
-		return fmt.Errorf("%s is not a directory", dir)
-	}
-	return nil
 }
 
 // QuerySource reads <source>/AGENTS.md and every skill directory under
@@ -171,42 +150,6 @@ func normalizeMode(m fs.FileMode) fs.FileMode {
 	return 0o644
 }
 
-// WriteFile writes rel (slash-separated) inside profileDir atomically.
-func (s *Store) WriteFile(_ context.Context, profileDir, rel string, data []byte, mode fs.FileMode) error {
-	return atomicfile.Write(filepath.Join(profileDir, filepath.FromSlash(rel)), data, mode)
-}
-
-// RemoveAll removes rel (slash-separated) inside profileDir: a directory with
-// its content, or a symbolic link itself (never its target).
-func (s *Store) RemoveAll(_ context.Context, profileDir, rel string) error {
-	return os.RemoveAll(filepath.Join(profileDir, filepath.FromSlash(rel)))
-}
-
-// QueryTracked returns those of paths that git tracks.
-func (s *Store) QueryTracked(ctx context.Context, paths []string) ([]string, error) {
-	return git.Tracked(ctx, paths)
-}
-
-// RemoveFile removes rel (slash-separated) inside profileDir and then the
-// directories that became empty, up to but excluding the first path element.
-func (s *Store) RemoveFile(_ context.Context, profileDir, rel string) error {
-	full := filepath.Join(profileDir, filepath.FromSlash(rel))
-	if info, err := os.Lstat(full); err == nil && info.IsDir() {
-		return fmt.Errorf("%s is a directory, not a file", full)
-	}
-	if err := os.Remove(full); err != nil && !os.IsNotExist(err) {
-		return err
-	}
-
-	top := filepath.Join(profileDir, strings.SplitN(filepath.FromSlash(rel), string(filepath.Separator), 2)[0])
-	for dir := filepath.Dir(full); dir != top && strings.HasPrefix(dir, top+string(filepath.Separator)); dir = filepath.Dir(dir) {
-		if err := os.Remove(dir); err != nil {
-			break // not empty (or gone): the directory has other content
-		}
-	}
-	return nil
-}
-
 // fileManifest is the JSON document of a manifest. Primitive types only.
 //
 // Entries are objects, not bare strings, so later versions can add fields
@@ -236,6 +179,10 @@ type fileOwned struct {
 }
 
 const manifestVersion = 1
+
+// codexSkillsDir is the one directory outside a Profile directory where sync
+// owns files (relative to it): where Codex reads user skills.
+const codexSkillsDir = "../.agents/skills"
 
 func toFileManifest(profile profilename.Name, m syncbus.Manifest) fileManifest {
 	fm := fileManifest{Version: manifestVersion, Profile: profile.String(), Files: []fileOwned{}}
@@ -267,42 +214,6 @@ func (s *Store) SaveManifest(_ context.Context, profile profilename.Name, m sync
 	}
 	_, err = atomicfile.WriteIfChanged(s.manifestPath(profile), append(data, '\n'), 0o600)
 	return err
-}
-
-// QueryEntry reads what is at rel (slash-separated) inside profileDir. A
-// symbolic link is reported as such, not followed.
-func (s *Store) QueryEntry(_ context.Context, profileDir, rel string) (syncbus.Entry, error) {
-	full := filepath.Join(profileDir, filepath.FromSlash(rel))
-	info, err := os.Lstat(full)
-	switch {
-	case os.IsNotExist(err):
-		return syncbus.Entry{Kind: syncbus.Missing}, nil
-	case err != nil:
-		return syncbus.Entry{}, err
-	}
-
-	switch {
-	case info.Mode().IsRegular():
-		data, err := os.ReadFile(full)
-		if err != nil {
-			return syncbus.Entry{}, err
-		}
-		return syncbus.Entry{Kind: syncbus.RegularFile, Files: []syncbus.File{{Mode: info.Mode().Perm(), Data: data}}}, nil
-	case info.IsDir():
-		files, err := readTree(full)
-		if err != nil {
-			return syncbus.Entry{}, err
-		}
-		return syncbus.Entry{Kind: syncbus.Directory, Files: files}, nil
-	case info.Mode()&fs.ModeSymlink != 0:
-		target, err := os.Readlink(full)
-		if err != nil {
-			return syncbus.Entry{}, err
-		}
-		return syncbus.Entry{Kind: syncbus.Symlink, Target: target}, nil
-	default:
-		return syncbus.Entry{Kind: syncbus.Other}, nil
-	}
 }
 
 // readTree reads everything below dir for showing and comparing: files with
@@ -347,116 +258,17 @@ func readTree(dir string) ([]syncbus.File, error) {
 	return files, err
 }
 
-// SaveBackup copies src to <baton dir>/backups/<profile>/<stamp>/<rel>.
-func (s *Store) SaveBackup(_ context.Context, profile profilename.Name, stamp, src, rel string) (string, error) {
-	dst := filepath.Join(s.batonDir, "backups", profile.String(), stamp, filepath.FromSlash(rel))
-	if err := copyTree(src, dst); err != nil {
-		return "", err
-	}
-	return dst, nil
-}
-
-// QueryShared reads rel (slash-separated) inside profileDir and follows a
-// symbolic link at rel to the file behind it.
-func (s *Store) QueryShared(_ context.Context, profileDir, rel string) (syncbus.SharedFile, error) {
-	full := filepath.Join(profileDir, filepath.FromSlash(rel))
-	info, err := os.Lstat(full)
-	switch {
-	case os.IsNotExist(err):
-		return syncbus.SharedFile{Path: full}, nil
-	case err != nil:
-		return syncbus.SharedFile{}, err
-	}
-
-	file := syncbus.SharedFile{Exists: true, Path: full}
-	if info.Mode()&fs.ModeSymlink != 0 {
-		if file.Path, err = filepath.EvalSymlinks(full); err != nil {
-			return syncbus.SharedFile{}, fmt.Errorf("%s: %w", full, err)
-		}
-		file.Linked = true
-		if info, err = os.Stat(file.Path); err != nil {
-			return syncbus.SharedFile{}, err
-		}
-	}
-	if !info.Mode().IsRegular() {
-		return syncbus.SharedFile{}, fmt.Errorf("%s is not a regular file", full)
-	}
-	file.Mode = info.Mode().Perm()
-	if file.Data, err = os.ReadFile(file.Path); err != nil {
-		return syncbus.SharedFile{}, err
-	}
-	return file, nil
-}
-
-// copyFile copies the content of src into a new file dst; it fails if dst
-// exists.
-func copyFile(src, dst string, perm fs.FileMode) (err error) {
-	in, err := os.Open(src)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = in.Close() }()
-
-	out, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_EXCL, perm)
-	if err != nil {
-		return err
-	}
-	defer func() {
-		if closeErr := out.Close(); err == nil {
-			err = closeErr
-		}
-	}()
-	_, err = io.Copy(out, in)
-	return err
-}
-
-// copyTree copies a file, a symbolic link (as a link) or a directory. It
-// refuses to overwrite anything, so a backup never replaces an older one.
-func copyTree(src, dst string) error {
-	info, err := os.Lstat(src)
-	if err != nil {
-		return err
-	}
-	switch {
-	case info.IsDir():
-		if err := os.MkdirAll(dst, 0o700); err != nil {
-			return err
-		}
-		entries, err := os.ReadDir(src)
-		if err != nil {
-			return err
-		}
-		for _, e := range entries {
-			if err := copyTree(filepath.Join(src, e.Name()), filepath.Join(dst, e.Name())); err != nil {
-				return err
-			}
-		}
-		return nil
-	case info.Mode()&fs.ModeSymlink != 0:
-		target, err := os.Readlink(src)
-		if err != nil {
-			return err
-		}
-		if err := os.MkdirAll(filepath.Dir(dst), 0o700); err != nil {
-			return err
-		}
-		return os.Symlink(target, dst)
-	case info.Mode().IsRegular():
-		if err := os.MkdirAll(filepath.Dir(dst), 0o700); err != nil {
-			return err
-		}
-		return copyFile(src, dst, info.Mode().Perm()|0o600)
-	default:
-		return nil // sockets and devices have nothing to back up
-	}
-}
-
 // toBusManifest converts the manifest document into the business type. Every
 // path must stay inside the Profile: sync deletes what the manifest lists, so
 // a damaged manifest must not point it elsewhere.
 func toBusManifest(fm fileManifest) (syncbus.Manifest, error) {
 	var m syncbus.Manifest
 	for _, f := range fm.Files {
+		// The skills of Codex sit next to its Profile directory.
+		if inner, ok := strings.CutPrefix(f.Path, codexSkillsDir+"/"); ok && filepath.IsLocal(inner) && path.Clean(inner) == inner {
+			m.Files = append(m.Files, syncbus.OwnedFile{Path: f.Path})
+			continue
+		}
 		if !filepath.IsLocal(f.Path) || path.Clean(f.Path) != f.Path {
 			return syncbus.Manifest{}, fmt.Errorf("path %q is not a clean relative path inside the Profile", f.Path)
 		}

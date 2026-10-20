@@ -4,13 +4,14 @@
 
 **Blocked by:** 04, 05
 
-**Status:** ready-for-agent
+**Status:** done (the hook's Event writing moved to 09)
 
-- [ ] Introduces the Runtime interface from the spec (start an Agent, locate and write Profiles, map a container path to a host path, check that a Session's Agent is alive); `host` and `sandbox` implement it, sync and later commands go through it, and the `compose` Runtime (16–18) can plug in without changing callers. Only the parts this ticket uses are implemented; the rest of the interface is declared and filled in by 09 and 11.
-- [ ] Every registered Project with Runtime `sandbox` contributes its Claude and Codex Profiles as sync targets, with their own accepted tags; their default tags are chosen here and recorded in `DESIGN.md` D4.
-- [ ] Claude in the sandbox gets instructions, skills, MCP servers and status hooks like a host Profile.
-- [ ] Codex in the sandbox gets skills and status hooks directly, and instructions and MCP servers only as fragments.
-- [ ] Sync never touches files `ai-sandbox` generates or owns (security settings, generated Codex config and instructions).
+- [x] Introduces the Runtime interface from the spec (start an Agent, locate and write Profiles, map a container path to a host path, check that a Session's Agent is alive); `host` and `sandbox` implement it, sync and later commands go through it, and the `compose` Runtime (16–18) can plug in without changing callers. Only the parts this ticket uses are implemented; the rest of the interface is declared and filled in by 09 and 11.
+- [x] Every registered Project with Runtime `sandbox` contributes its Claude and Codex Profiles as sync targets, with their own accepted tags; their default tags are chosen here and recorded in `DESIGN.md` D4.
+- [x] Claude in the sandbox gets instructions, skills, MCP servers and status hooks like a host Profile.
+- [x] Codex in the sandbox gets skills and status hooks directly, and instructions and MCP servers only as fragments.
+- [x] Sync never touches files `ai-sandbox` generates or owns (security settings, generated Codex config and instructions).
 - [ ] Status hooks in sandbox Profiles call the Baton binary at the path where it is mounted inside the container, with `--runtime sandbox` and the Profile's name, and write Events into the mounted Project directory (`sessions/`).
-- [ ] Before building: check whether `run.sh` regenerates Codex `hooks.json` or the skills directory; anything it regenerates gets the fragment treatment.
-- [ ] All ownership rules from 02 hold for sandbox Profiles, including the question and backup for shared files.
+  - Not ticked: sync writes the hooks with the binary path `/baton/bin/baton`, `--runtime sandbox` and the Profile name, and DESIGN.md fixes the mounts (`/baton/bin`, `/baton/project`); making `baton hook --runtime sandbox` write its Events into `/baton/project/sessions/` (and do nothing without that mount) is left to ticket 09, which adds the mounts the hook needs to be tested against.
+- [x] Before building: check whether `run.sh` regenerates Codex `hooks.json` or the skills directory; anything it regenerates gets the fragment treatment.
+- [x] All ownership rules from 02 hold for sandbox Profiles, including the question and backup for shared files.

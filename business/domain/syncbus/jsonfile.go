@@ -69,7 +69,7 @@ func (b *Bus) planJSONKeys(ctx context.Context, plan *profilePlan, previous Mani
 		return nil
 	}
 
-	file, err := b.storer.QueryShared(ctx, plan.profile.Dir, t.rel)
+	file, err := plan.files.QueryShared(ctx, t.rel)
 	if err != nil {
 		return err
 	}
@@ -102,8 +102,8 @@ func (b *Bus) planJSONKeys(ctx context.Context, plan *profilePlan, previous Mani
 	plan.shared = append(plan.shared, sharedChange{rel: t.rel, path: file.Path, data: edit.data, mode: file.Mode.Perm()})
 	if edit.needsAsk {
 		plan.asks = append(plan.asks, ask{
-			rel:  t.backupRel,
-			path: file.Path,
+			rel:      t.backupRel,
+			snapshot: snapshotOf(file),
 			question: Question{
 				Profile: plan.profile.Name.String(),
 				Path:    plan.abs(t.rel),

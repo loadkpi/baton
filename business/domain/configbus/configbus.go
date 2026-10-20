@@ -8,6 +8,7 @@ import (
 
 	"github.com/loadkpi/baton/business/types/agent"
 	"github.com/loadkpi/baton/business/types/profilename"
+	"github.com/loadkpi/baton/business/types/projectname"
 	"github.com/loadkpi/baton/business/types/tag"
 )
 
@@ -22,6 +23,26 @@ type Config struct {
 	DefaultProfile profilename.Name
 	// Profiles are the host Profiles, in the order of their names.
 	Profiles []Profile
+	// Projects are the per-Project settings, in the order of the names.
+	Projects []ProjectSettings
+}
+
+// ProjectSettings are the settings of one Project in the config.
+type ProjectSettings struct {
+	Name projectname.Name
+	// Tags are the tags the Profiles inside the Project's sandbox accept. None
+	// means they receive only untagged items.
+	Tags []tag.Tag
+}
+
+// SandboxTags returns the tags the sandbox Profiles of a Project accept.
+func (c Config) SandboxTags(project projectname.Name) []tag.Tag {
+	for _, p := range c.Projects {
+		if p.Name == project {
+			return p.Tags
+		}
+	}
+	return nil
 }
 
 // Profile is a host Profile: an Agent's config directory.

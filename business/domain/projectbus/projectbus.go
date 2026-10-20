@@ -123,6 +123,11 @@ func (b *Bus) register(ctx context.Context, root string) (Project, error) {
 	return p, nil
 }
 
+// All returns every registered Project.
+func (b *Bus) All(ctx context.Context) ([]Project, error) {
+	return b.storer.QueryAll(ctx)
+}
+
 // Named returns the registered Project with the name.
 func (b *Bus) Named(ctx context.Context, ref string) (Project, error) {
 	name, err := projectname.Parse(ref)

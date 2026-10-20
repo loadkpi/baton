@@ -6,19 +6,30 @@ import (
 	"fmt"
 	"io/fs"
 	"path"
-	"path/filepath"
 	"slices"
 	"sort"
 	"strings"
 
 	"github.com/loadkpi/baton/business/domain/configbus"
+	"github.com/loadkpi/baton/business/types/runtime"
 	"github.com/loadkpi/baton/business/types/tag"
+	"github.com/loadkpi/baton/foundation/frontmatter"
 	"github.com/loadkpi/baton/foundation/textdiff"
 )
 
 // profilePlan is what sync is about to do to one Profile.
 type profilePlan struct {
 	profile configbus.Profile
+	// files is how the Profile is read and written; layout is where things go.
+	files  ProfileFiles
+	layout layout
+	// runtime and binary say how the Profile's status hooks call Baton.
+	runtime runtime.Runtime
+	binary  string
+	// home is the HOME the Agent sees.
+	home string
+	// hidden are the secrets that no question may show.
+	hidden map[string]string
 	// manifest is what the Profile's manifest says once sync is done.
 	manifest Manifest
 	// writes are the files whose content or mode differ from the source.
@@ -44,7 +55,7 @@ type profilePlan struct {
 // sharedChange is the change to the Baton block of one shared file.
 type sharedChange struct {
 	rel string
-	// path is the file itself, with symbolic links resolved.
+	// path is the file itself, with symbolic links resolved (SharedFile.Path).
 	path string
 	data []byte
 	mode fs.FileMode
@@ -61,22 +72,31 @@ type plannedWrite struct {
 // the user agrees, it is backed up first; a directory or symbolic link is
 // removed before the skill is written in its place.
 type ask struct {
-	// rel is the path inside the Profile, which names the backup; path is
-	// the absolute path to copy.
+	// rel is the path inside the Profile, which names the backup; snapshot is
+	// what is there now, which the backup keeps.
 	rel         string
-	path        string
+	snapshot    Entry
 	question    Question
 	removeFirst bool
 }
 
-// abs is the absolute path of rel inside the Profile.
+// abs is the path of rel inside the Profile as it is shown to the user.
 func (p profilePlan) abs(rel string) string {
-	return filepath.Join(p.profile.Dir, filepath.FromSlash(rel))
+	return p.files.Path(rel)
+}
+
+// snapshotOf is what a shared file holds now, for its backup.
+func snapshotOf(f SharedFile) Entry {
+	return Entry{Kind: RegularFile, Files: []File{{Mode: f.Mode, Data: f.Data}}}
 }
 
 // plan decides what to do to one Profile. It reads, and writes nothing.
-func (b *Bus) plan(ctx context.Context, p configbus.Profile, home string, source Source, secrets Secrets) (profilePlan, error) {
-	previous, err := b.storer.QueryManifest(ctx, p.Name)
+func (b *Bus) plan(ctx context.Context, t Target, source Source, secrets Secrets, res *Result) (profilePlan, error) {
+	lay, err := layoutOf(t)
+	if err != nil {
+		return profilePlan{}, err
+	}
+	previous, err := b.storer.QueryManifest(ctx, t.Profile.Name)
 	if err != nil {
 		return profilePlan{}, err
 	}
@@ -85,18 +105,29 @@ func (b *Bus) plan(ctx context.Context, p configbus.Profile, home string, source
 		owned[f.Path] = true
 	}
 
-	plan := profilePlan{profile: p}
+	plan := profilePlan{profile: t.Profile, files: t.Files, layout: lay, runtime: t.Runtime, binary: t.HookBinary, home: t.Home, hidden: secrets.Values}
 	wanted := make(map[string]bool)
 	for _, s := range source.Skills {
-		if !tag.AcceptedBy(s.Tags, p.Tags) {
+		if !tag.AcceptedBy(s.Tags, t.Profile.Tags) {
 			continue
 		}
-		if err := b.planSkill(ctx, &plan, owned, s); err != nil {
+		skill, err := lay.skillFor(s)
+		if err != nil {
 			return profilePlan{}, err
 		}
-		for _, f := range s.Files {
-			wanted[path.Join("skills", s.Name, f.Path)] = true
+		if err := b.planSkill(ctx, &plan, owned, skill); err != nil {
+			return profilePlan{}, err
 		}
+		for _, f := range skill.Files {
+			wanted[path.Join(lay.skillsRel, skill.Name, f.Path)] = true
+		}
+	}
+
+	if err := b.planInstructions(ctx, &plan, previous, source, owned, wanted); err != nil {
+		return profilePlan{}, err
+	}
+	if err := b.planMCP(ctx, &plan, previous, source, secrets, owned, wanted, res); err != nil {
+		return profilePlan{}, err
 	}
 
 	for rel := range wanted {
@@ -109,38 +140,53 @@ func (b *Bus) plan(ctx context.Context, p configbus.Profile, home string, source
 		}
 	}
 
-	if err := b.planInstructions(ctx, &plan, previous, source); err != nil {
-		return profilePlan{}, err
-	}
-	if err := b.planMCP(ctx, &plan, home, previous, source, secrets); err != nil {
-		return profilePlan{}, err
-	}
-	if err := b.planHooks(ctx, &plan, home, previous); err != nil {
+	if err := b.planHooks(ctx, &plan, previous); err != nil {
 		return profilePlan{}, err
 	}
 	return plan, nil
 }
 
+// skillFor returns the skill as it is copied into this layout's Profile.
+func (l layout) skillFor(s Skill) (Skill, error) {
+	if !l.stripSkillTags {
+		return s, nil
+	}
+	files := make([]File, len(s.Files))
+	copy(files, s.Files)
+	for i, f := range files {
+		if f.Path != "SKILL.md" {
+			continue
+		}
+		stripped, err := frontmatter.Remove(string(f.Data), "tags")
+		if err != nil {
+			return Skill{}, fmt.Errorf("skills/%s/SKILL.md: %w", s.Name, err)
+		}
+		files[i].Data = []byte(stripped)
+	}
+	s.Files = files
+	return s, nil
+}
+
 // planSkill plans the files of one source skill.
 func (b *Bus) planSkill(ctx context.Context, plan *profilePlan, owned map[string]bool, s Skill) error {
-	dirRel := path.Join("skills", s.Name)
+	dirRel := path.Join(plan.layout.skillsRel, s.Name)
 
 	// Nothing of this skill is ours: whatever sits at its path belongs to
 	// someone else, and is replaced as a whole.
 	if !ownsAnyUnder(owned, dirRel) {
-		entry, err := b.storer.QueryEntry(ctx, plan.profile.Dir, dirRel)
+		entry, err := plan.files.QueryEntry(ctx, dirRel)
 		if err != nil {
 			return err
 		}
 		if entry.Kind != Missing {
 			plan.asks = append(plan.asks, ask{
 				rel:         dirRel,
-				path:        plan.abs(dirRel),
+				snapshot:    entry,
 				removeFirst: true,
 				question: Question{
 					Profile: plan.profile.Name.String(),
 					Path:    plan.abs(dirRel),
-					Diff:    diffReplacement(entry, s),
+					Diff:    diffReplacement(entry, dirRel, s),
 				},
 			})
 			for _, f := range s.Files {
@@ -151,36 +197,45 @@ func (b *Bus) planSkill(ctx context.Context, plan *profilePlan, owned map[string
 	}
 
 	for _, f := range s.Files {
-		rel := path.Join(dirRel, f.Path)
-		entry, err := b.storer.QueryEntry(ctx, plan.profile.Dir, rel)
-		if err != nil {
+		if err := b.planOwnedFile(ctx, plan, owned, path.Join(dirRel, f.Path), f); err != nil {
 			return err
 		}
-		switch entry.Kind {
-		case Missing:
+	}
+	return nil
+}
+
+// planOwnedFile plans one file that sync wants to own: a file of a skill or a
+// fragment. A file that is not there is written, one that sync wrote is
+// updated, and one that is somebody else's is a question.
+func (b *Bus) planOwnedFile(ctx context.Context, plan *profilePlan, owned map[string]bool, rel string, f File) error {
+	entry, err := plan.files.QueryEntry(ctx, rel)
+	if err != nil {
+		return err
+	}
+	switch entry.Kind {
+	case Missing:
+		plan.writes = append(plan.writes, plannedWrite{rel: rel, file: f})
+	case RegularFile:
+		current := entry.Files[0]
+		switch {
+		case owned[rel] && sameFile(current, f):
+			plan.unchanged++
+		case owned[rel]:
 			plan.writes = append(plan.writes, plannedWrite{rel: rel, file: f})
-		case RegularFile:
-			current := entry.Files[0]
-			switch {
-			case owned[rel] && sameFile(current, f):
-				plan.unchanged++
-			case owned[rel]:
-				plan.writes = append(plan.writes, plannedWrite{rel: rel, file: f})
-			default:
-				plan.asks = append(plan.asks, ask{
-					rel:  rel,
-					path: plan.abs(rel),
-					question: Question{
-						Profile: plan.profile.Name.String(),
-						Path:    plan.abs(rel),
-						Diff:    diffFile("a/"+rel, "b/"+rel, current, f),
-					},
-				})
-				plan.writes = append(plan.writes, plannedWrite{rel: rel, file: f})
-			}
 		default:
-			return fmt.Errorf("%s exists and is not a regular file", plan.abs(rel))
+			plan.asks = append(plan.asks, ask{
+				rel:      rel,
+				snapshot: entry,
+				question: Question{
+					Profile: plan.profile.Name.String(),
+					Path:    plan.abs(rel),
+					Diff:    hide(diffFile("a/"+rel, "b/"+rel, current, f), plan.hidden),
+				},
+			})
+			plan.writes = append(plan.writes, plannedWrite{rel: rel, file: f})
 		}
+	default:
+		return fmt.Errorf("%s exists and is not a regular file", plan.abs(rel))
 	}
 	return nil
 }
@@ -208,9 +263,8 @@ func diffFile(oldName, newName string, current, want File) string {
 
 // diffReplacement describes what happens when whatever is at a skill's path is
 // replaced by the skill from the source.
-func diffReplacement(entry Entry, s Skill) string {
+func diffReplacement(entry Entry, prefix string, s Skill) string {
 	var b strings.Builder
-	prefix := "skills/" + s.Name
 
 	switch entry.Kind {
 	case Symlink:
@@ -272,8 +326,9 @@ func describe(f File) File {
 
 // checkTracked stops when sync would change a file that git tracks.
 func (b *Bus) checkTracked(ctx context.Context, plans []profilePlan) error {
-	var paths []string
+	var tracked []string
 	for _, plan := range plans {
+		var paths []string
 		for _, a := range plan.asks {
 			paths = append(paths, plan.abs(a.rel))
 		}
@@ -286,10 +341,11 @@ func (b *Bus) checkTracked(ctx context.Context, plans []profilePlan) error {
 		for _, rel := range plan.stale {
 			paths = append(paths, plan.abs(rel))
 		}
-	}
-	tracked, err := b.storer.QueryTracked(ctx, paths)
-	if err != nil {
-		return err
+		found, err := plan.files.QueryTracked(ctx, paths)
+		if err != nil {
+			return err
+		}
+		tracked = append(tracked, found...)
 	}
 	if len(tracked) > 0 {
 		return fmt.Errorf("refusing to change %s: git tracks it", strings.Join(slices.Compact(tracked), ", "))
@@ -322,7 +378,7 @@ func (b *Bus) apply(ctx context.Context, plan profilePlan, stamp string) (Profil
 	pr := ProfileResult{Name: plan.profile.Name, Unchanged: plan.unchanged}
 
 	for _, a := range plan.asks {
-		copyPath, err := b.storer.SaveBackup(ctx, plan.profile.Name, stamp, a.path, a.rel)
+		copyPath, err := b.storer.SaveBackup(ctx, plan.profile.Name, stamp, a.rel, a.snapshot)
 		if err != nil {
 			return ProfileResult{}, fmt.Errorf("back up %s: %w", a.question.Path, err)
 		}
@@ -343,19 +399,19 @@ func (b *Bus) apply(ctx context.Context, plan profilePlan, stamp string) (Profil
 
 	for _, a := range plan.asks {
 		if a.removeFirst {
-			if err := b.storer.RemoveAll(ctx, plan.profile.Dir, a.rel); err != nil {
+			if err := plan.files.RemoveAll(ctx, a.rel); err != nil {
 				return ProfileResult{}, err
 			}
 		}
 	}
 	for _, rel := range plan.stale {
-		if err := b.storer.RemoveFile(ctx, plan.profile.Dir, rel); err != nil {
+		if err := plan.files.RemoveFile(ctx, rel); err != nil {
 			return ProfileResult{}, err
 		}
 		pr.Removed++
 	}
 	for _, w := range plan.writes {
-		if err := b.storer.WriteFile(ctx, plan.profile.Dir, w.rel, w.file.Data, w.file.Mode); err != nil {
+		if err := plan.files.WriteFile(ctx, w.rel, w.file.Data, w.file.Mode); err != nil {
 			return ProfileResult{}, err
 		}
 		pr.Written++
@@ -363,14 +419,13 @@ func (b *Bus) apply(ctx context.Context, plan profilePlan, stamp string) (Profil
 
 	for _, c := range plan.shared {
 		if c.remove {
-			err := b.storer.RemoveFile(ctx, filepath.Dir(c.path), filepath.Base(c.path))
-			if err != nil {
+			if err := plan.files.RemoveShared(ctx, c.path); err != nil {
 				return ProfileResult{}, err
 			}
 			pr.Removed++
 			continue
 		}
-		if err := b.storer.WriteFile(ctx, filepath.Dir(c.path), filepath.Base(c.path), c.data, c.mode); err != nil {
+		if err := plan.files.WriteShared(ctx, c.path, c.data, c.mode); err != nil {
 			return ProfileResult{}, err
 		}
 		pr.Written++

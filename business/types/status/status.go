@@ -26,7 +26,6 @@ const (
 func (s Status) String() string { return string(s) }
 
 // claudeTable is the Claude Code column of the status table in DESIGN.md.
-// Codex gets its column with ticket 10.
 var claudeTable = map[string]Status{
 	"UserPromptSubmit":   Running,
 	"PreToolUse":         Running,
@@ -38,11 +37,28 @@ var claudeTable = map[string]Status{
 	"SessionEnd":         Ended,
 }
 
+// codexTable is the Codex column of the same table. Sync needs its Events to
+// install the hooks (ticket 08); ticket 10 makes `baton ls` use it.
+var codexTable = map[string]Status{
+	"UserPromptSubmit":  Running,
+	"PreToolUse":        Running,
+	"PostToolUse":       Running,
+	"PermissionRequest": WaitingApproval,
+	"SessionStart":      WaitingInput,
+	"Stop":              WaitingInput,
+	"Interrupt":         WaitingInput,
+	"SessionEnd":        Ended,
+}
+
 func tableOf(a agent.Agent) map[string]Status {
-	if a == agent.Claude {
+	switch a {
+	case agent.Claude:
 		return claudeTable
+	case agent.Codex:
+		return codexTable
+	default:
+		return nil
 	}
-	return nil
 }
 
 // FromEvent returns the status that an Event of the Agent puts a Session in.

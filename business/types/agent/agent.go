@@ -11,6 +11,10 @@ type Agent struct {
 // Claude is Claude Code.
 var Claude = Agent{name: "claude"}
 
+// Codex is the Codex CLI. It runs only in a sandbox, so Parse does not accept
+// it yet (ticket 10 does).
+var Codex = Agent{name: "codex"}
+
 // Parse converts a configured name into an Agent.
 func Parse(s string) (Agent, error) {
 	switch s {

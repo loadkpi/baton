@@ -161,12 +161,15 @@ func staleServers(previous Manifest, rel string, wanted mcpServers) []OwnedKey {
 // planMCP plans the servers of the source in the Profile's MCP configuration.
 // The file is shared and its rules are those of planJSONKeys; the keys are the
 // named servers under mcpServers.
-func (b *Bus) planMCP(ctx context.Context, plan *profilePlan, home string, previous Manifest, source Source, secrets Secrets) error {
+func (b *Bus) planMCP(ctx context.Context, plan *profilePlan, previous Manifest, source Source, secrets Secrets, owned, wantedFiles map[string]bool, res *Result) error {
 	wanted, err := serversFor(plan.profile, source, secrets)
 	if err != nil {
 		return err
 	}
-	rel := mcpRel(plan.profile.Dir, home)
+	if plan.layout.mcp == fragmentMCP {
+		return b.planMCPFragment(ctx, plan, wanted, owned, wantedFiles, res)
+	}
+	rel := mcpRel(plan.profile.Dir, plan.home)
 
 	keys := make([]wantedKey, 0, len(wanted.names))
 	for _, name := range wanted.names {

@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/loadkpi/baton/business/domain/configbus"
+	"github.com/loadkpi/baton/business/types/agent"
 	"github.com/loadkpi/baton/business/types/profilename"
 	"github.com/loadkpi/baton/business/types/tag"
 )
@@ -133,19 +134,15 @@ type Entry struct {
 	Target string
 }
 
-// Storer is the file storage sync works with: the source repository, the
-// Profile directories, the manifests and the backups.
+// Storer is the storage sync works with outside the Profiles: the source
+// repository, the secrets, the manifests and the backups. The files of a
+// Profile are reached through its Target (ProfileFiles).
 type Storer interface {
 	// QueryManifest returns the manifest of a Profile; a Profile that was
 	// never synced has an empty one.
 	QueryManifest(ctx context.Context, profile profilename.Name) (Manifest, error)
 	// SaveManifest replaces the manifest of a Profile unless it is identical.
 	SaveManifest(ctx context.Context, profile profilename.Name, m Manifest) error
-	// QueryEntry reads what exists at rel (slash-separated) inside a Profile
-	// directory. It does not follow a symbolic link at rel.
-	QueryEntry(ctx context.Context, profileDir, rel string) (Entry, error)
-	// CheckProfileDir fails unless dir is an existing directory.
-	CheckProfileDir(ctx context.Context, dir string) error
 	// QuerySource reads the instructions and the skills of the source
 	// repository. A source without a skills directory has no skills; it is an
 	// error if source itself is not a directory.
@@ -153,29 +150,12 @@ type Storer interface {
 	// QuerySecrets reads the values of ${VAR} placeholders. A missing secrets
 	// file holds no values; one that others can read is an error.
 	QuerySecrets(ctx context.Context) (Secrets, error)
-	// QueryShared reads the file at rel (slash-separated) inside a Profile
-	// directory, following a symbolic link at rel.
-	QueryShared(ctx context.Context, profileDir, rel string) (SharedFile, error)
-	// QueryTracked returns those of the absolute paths that git tracks.
-	QueryTracked(ctx context.Context, paths []string) ([]string, error)
-	// SaveBackup copies src (an absolute path: a file, a directory or a
-	// symbolic link) to the backups of the Profile, to rel inside the
-	// directory named stamp. It returns where the copy is and never
-	// overwrites one.
-	SaveBackup(ctx context.Context, profile profilename.Name, stamp, src, rel string) (string, error)
-	// WriteFile writes a file inside a Profile directory (rel is
-	// slash-separated) atomically.
-	WriteFile(ctx context.Context, profileDir, rel string, data []byte, mode fs.FileMode) error
-	// RemoveFile removes a file inside a Profile directory (rel is
-	// slash-separated), then the directories it leaves empty, but never the
-	// first path element ("skills"). A file that is already gone is fine.
-	RemoveFile(ctx context.Context, profileDir, rel string) error
+	// SaveBackup writes a copy of what a Profile had at rel to the backups of
+	// the Profile, inside the directory named stamp. It returns where the copy
+	// is and never overwrites one.
+	SaveBackup(ctx context.Context, profile profilename.Name, stamp, rel string, entry Entry) (string, error)
 	// QueryExecutable reports whether path is a file somebody can execute.
 	QueryExecutable(ctx context.Context, path string) (bool, error)
-	// RemoveAll removes whatever is at rel inside a Profile directory: a
-	// directory with everything in it, or a symbolic link itself, never what
-	// it points to.
-	RemoveAll(ctx context.Context, profileDir, rel string) error
 }
 
 // Question is what sync asks the user before it changes something it does not
@@ -220,6 +200,7 @@ type Backup struct {
 // ProfileResult is what sync did to one Profile.
 type ProfileResult struct {
 	Name      profilename.Name
+	Agent     agent.Agent
 	Written   int
 	Removed   int
 	Unchanged int
@@ -236,14 +217,20 @@ type Result struct {
 	Warnings []string
 }
 
-// Sync renders the source repository named in cfg into every Profile of cfg.
-// It first checks everything, plans all Profiles, refuses to touch tracked
-// files and asks every question; it writes only when no Profile has a problem
-// and every question was answered yes.
-func (b *Bus) Sync(ctx context.Context, cfg configbus.Config) (Result, error) {
-	for _, p := range cfg.Profiles {
-		if err := b.storer.CheckProfileDir(ctx, p.Dir); err != nil {
-			return Result{}, fmt.Errorf("profile %s: %w", p.Name, err)
+// Sync renders the source repository named in cfg into every target. It first
+// checks everything, plans all Profiles, refuses to touch tracked files and
+// asks every question; it writes only when no Profile has a problem and every
+// question was answered yes.
+func (b *Bus) Sync(ctx context.Context, cfg configbus.Config, targets []Target) (Result, error) {
+	seen := make(map[string]bool, len(targets))
+	for _, t := range targets {
+		name := t.Profile.Name.String()
+		if seen[name] {
+			return Result{}, fmt.Errorf("two Profiles are called %s; rename the one in the config", name)
+		}
+		seen[name] = true
+		if err := t.Files.Check(ctx); err != nil {
+			return Result{}, fmt.Errorf("profile %s: %w", t.Profile.Name, err)
 		}
 	}
 
@@ -262,11 +249,11 @@ func (b *Bus) Sync(ctx context.Context, cfg configbus.Config) (Result, error) {
 		res.Warnings = append(res.Warnings, fmt.Sprintf("skipped skills/%s: it has no SKILL.md", name))
 	}
 
-	plans := make([]profilePlan, 0, len(cfg.Profiles))
-	for _, p := range cfg.Profiles {
-		plan, err := b.plan(ctx, p, cfg.Home, source, secrets)
+	plans := make([]profilePlan, 0, len(targets))
+	for _, t := range targets {
+		plan, err := b.plan(ctx, t, source, secrets, &res)
 		if err != nil {
-			return Result{}, fmt.Errorf("profile %s: %w", p.Name, err)
+			return Result{}, fmt.Errorf("profile %s: %w", t.Profile.Name, err)
 		}
 		plans = append(plans, plan)
 	}
@@ -288,6 +275,7 @@ func (b *Bus) Sync(ctx context.Context, cfg configbus.Config) (Result, error) {
 		if err != nil {
 			return Result{}, fmt.Errorf("profile %s: %w", plan.profile.Name, err)
 		}
+		pr.Agent = plan.profile.Agent
 		pr.HooksFirst = plan.hooksFirst
 		res.Profiles = append(res.Profiles, pr)
 	}
@@ -304,10 +292,10 @@ func (b *Bus) warnAboutHookBinary(ctx context.Context, plans []profilePlan, home
 	if !wanted {
 		return nil
 	}
-	ok, err := b.storer.QueryExecutable(ctx, hookBinary(home))
+	ok, err := b.storer.QueryExecutable(ctx, hostHookBinary(home))
 	if err != nil || ok {
 		return err
 	}
-	res.Warnings = append(res.Warnings, fmt.Sprintf("the status hooks call %s, which is missing or not executable, so they fail until it is there; run `make install` in the Baton repository or copy the binary there", hookBinary(home)))
+	res.Warnings = append(res.Warnings, fmt.Sprintf("the status hooks call %s, which is missing or not executable, so they fail until it is there; run `make install` in the Baton repository or copy the binary there", hostHookBinary(home)))
 	return nil
 }

@@ -14,6 +14,7 @@ import (
 	"github.com/loadkpi/baton/business/domain/configbus"
 	"github.com/loadkpi/baton/business/types/agent"
 	"github.com/loadkpi/baton/business/types/profilename"
+	"github.com/loadkpi/baton/business/types/projectname"
 	"github.com/loadkpi/baton/business/types/tag"
 )
 
@@ -34,6 +35,11 @@ type fileConfig struct {
 	Source         string                 `toml:"source"`
 	DefaultProfile string                 `toml:"default_profile"`
 	Profiles       map[string]fileProfile `toml:"profiles"`
+	Projects       map[string]fileProject `toml:"projects"`
+}
+
+type fileProject struct {
+	Tags []string `toml:"tags"`
 }
 
 type fileProfile struct {
@@ -92,6 +98,18 @@ func toBusConfig(fc fileConfig, home string) (configbus.Config, error) {
 		}
 		cfg.Profiles = append(cfg.Profiles, p)
 	}
+	projects := make([]string, 0, len(fc.Projects))
+	for name := range fc.Projects {
+		projects = append(projects, name)
+	}
+	sort.Strings(projects)
+	for _, name := range projects {
+		p, err := toBusProjectSettings(name, fc.Projects[name])
+		if err != nil {
+			return configbus.Config{}, err
+		}
+		cfg.Projects = append(cfg.Projects, p)
+	}
 	if fc.DefaultProfile != "" {
 		name, err := profilename.Parse(fc.DefaultProfile)
 		if err != nil {
@@ -103,6 +121,18 @@ func toBusConfig(fc fileConfig, home string) (configbus.Config, error) {
 		cfg.DefaultProfile = name
 	}
 	return cfg, nil
+}
+
+func toBusProjectSettings(name string, fp fileProject) (configbus.ProjectSettings, error) {
+	pn, err := projectname.Parse(name)
+	if err != nil {
+		return configbus.ProjectSettings{}, fmt.Errorf("projects.%s: %w", name, err)
+	}
+	tags, err := tag.ParseAll(fp.Tags)
+	if err != nil {
+		return configbus.ProjectSettings{}, fmt.Errorf("projects.%s: tags: %w", name, err)
+	}
+	return configbus.ProjectSettings{Name: pn, Tags: tags}, nil
 }
 
 func toBusProfile(name string, fp fileProfile, home string) (configbus.Profile, error) {

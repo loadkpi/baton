@@ -10,6 +10,7 @@
 - [ ] The container gets exactly two Baton mounts: this Project's Baton directory read-write and the binary directory read-only (verified through a `docker` stub and a real copy of `run.sh`).
 - [ ] Baton's fragments end up between Baton's own markers in the rendered Codex config and instructions; repeated launches do not duplicate them, including when the user removed `ai-sandbox`'s marker.
 - [ ] If the image is missing, Baton builds it the way `ai-sandbox` does before launching.
+- [ ] `baton hook <agent> --runtime sandbox` writes its Event line into the mounted Project directory (`/baton/project/sessions/<agent>-<session>.jsonl`, the paths fixed in ticket 08), under the same file lock as on the host. Moved here from 08.
 - [ ] Baton's hooks inside a container without the Baton mount do nothing and exit successfully.
 - [ ] A Claude Session in the sandbox appears in `baton ls` with Runtime `sandbox` and live status.
 - [ ] Sandbox Sessions run only in the Project's main checkout.

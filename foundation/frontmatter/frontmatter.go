@@ -113,3 +113,48 @@ func unquote(s string) string {
 	}
 	return s
 }
+
+// Remove returns text without the top-level key (and, for a block list, its
+// "- a" lines) in the front matter. Everything else stays byte for byte. A text
+// without front matter, or without the key, is returned as it is.
+func Remove(text, key string) (string, error) {
+	lines := strings.SplitAfter(text, "\n")
+	if len(lines) == 0 || strings.TrimRight(lines[0], " \t\r\n") != "---" {
+		return text, nil
+	}
+	end := -1
+	for i := 1; i < len(lines); i++ {
+		if strings.TrimRight(lines[i], " \t\r\n") == "---" {
+			end = i
+			break
+		}
+	}
+	if end < 0 {
+		return "", errors.New("front matter is not closed by a line \"---\"")
+	}
+
+	for i := 1; i < end; i++ {
+		rest, ok := strings.CutPrefix(lines[i], key+":")
+		if !ok {
+			continue
+		}
+		last := i
+		if strings.TrimSpace(stripComment(rest)) == "" {
+			// A block list: take the item lines, and the blank or comment
+			// lines between them.
+			for j := i + 1; j < end; j++ {
+				t := strings.TrimSpace(lines[j])
+				if t == "" || strings.HasPrefix(t, "#") {
+					continue
+				}
+				item, ok := strings.CutPrefix(t, "-")
+				if !ok || (item != "" && item[0] != ' ') {
+					break
+				}
+				last = j
+			}
+		}
+		return strings.Join(lines[:i], "") + strings.Join(lines[last+1:], ""), nil
+	}
+	return text, nil
+}

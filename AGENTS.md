@@ -12,6 +12,7 @@ Module `github.com/loadkpi/baton`, Go 1.24, `CGO_ENABLED=0`. Structure and appro
 app/baton/                                  main and command wiring: flags, output, exit codes
 business/domain/<name>bus/                  domain logic, one package per domain
 business/domain/<name>bus/stores/<name>file/ file-backed storage of that domain
+business/domain/runtimebus/                 the Runtime interface; its implementations (host, sandbox) are in stores/runtime<name>/
 business/types/<type>/                      strong types (validated on Parse); used by the business layer only
 foundation/<pkg>/                           generic packages that know nothing about Baton
 internal/batontest/                         the test harness (see Tests)
@@ -42,7 +43,8 @@ There is exactly one seam: the built `baton` executable, run as a subprocess aga
 - The outside world is stubbed on `PATH`. Stubs for `guake`, `docker`, `notify-send`, `claude` and `codex` are installed in every `Env` and record their calls; read them with `env.Calls(name)`, customize with `env.Stub(name, batontest.WithScript(...))`. Add stubs for new external programs in the same way. Git is real. Telegram is a local HTTP server.
 - Processes started by an `Env` get an environment built from scratch (no inherited variables, no `XDG_*`, no git config). Run other programs with `env.Command`, which resolves them against the Env's `PATH`, never the test process's.
 - Questions to the user are tested through a pseudo-terminal: `env.RunTerminal(replies, args...)` types one reply per `[y/N] ` prompt, `env.StartTerminal` gives `Expect` / `Send` / `Wait` for anything less regular. The pseudo-terminal is made with the standard library (Linux only), so there is no pty dependency. "No terminal" is `env.RunWithStdin`, whose stdin is a pipe.
-- Fixtures live in `test/testdata/`. The Claude Code hook payloads there are copied from the vendor documentation and say so in their README; replace them with recordings when you have them.
+- Fixtures live in `test/testdata/`. The Claude Code hook payloads there are copied from the vendor documentation and say so in their README; replace them with recordings when you have them. `test/testdata/ai-sandbox/` is a copy of `ai-sandbox`'s `run.sh` (see its README for the commit); tests run it only in its print-args mode, with the `docker` stub on `PATH`, inside a temporary Project.
+- `go test` caches a passing run of `./test` although the binary it builds from the other packages changed; use `go test -count=1` (the make target does).
 - Assert on external behavior only: stdout, stderr, exit code, files, stub calls. Expected values are literals, not recomputed the way the code does it.
 - Work test first, in vertical slices: one failing test, the minimal code to pass, next test. Refactor at the end.
 
@@ -60,7 +62,7 @@ There is exactly one seam: the built `baton` executable, run as a subprocess aga
 | --- | --- |
 | `make build` | static binary to `bin/baton` |
 | `make install` | copies the binary to `~/.baton/bin/baton`, where the hooks written by `baton sync` call it (run it by hand; tests never do) |
-| `make test-only` | `go test ./...` |
+| `make test-only` | `go test -count=1 ./...` |
 | `make lint` | `golangci-lint run` |
 | `make fmt` | `gofmt -w .` |
 | `make vet` | `go vet ./...` |

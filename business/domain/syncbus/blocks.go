@@ -60,10 +60,18 @@ func recordedSum(m Manifest, rel string) (string, bool) {
 // question. The block Baton wrote before is updated or removed without one too,
 // as long as its body is still what Baton wrote; anything else (a file that
 // has no block, a block that was edited) is a question.
-func (b *Bus) planInstructions(ctx context.Context, plan *profilePlan, previous Manifest, source Source) error {
+func (b *Bus) planInstructions(ctx context.Context, plan *profilePlan, previous Manifest, source Source, owned, wantedFiles map[string]bool) error {
 	body, wanted, err := instructionsBlock(source, plan.profile.Tags)
 	if err != nil {
 		return err
+	}
+	if plan.layout.instructions == fragmentForm {
+		if !wanted {
+			return nil
+		}
+		f := File{Path: instructionsFragmentFile, Mode: 0o644, Data: []byte(body + "\n")}
+		wantedFiles[instructionsFragmentFile] = true
+		return b.planOwnedFile(ctx, plan, owned, instructionsFragmentFile, f)
 	}
 	rel := instructionsFile
 	sum, recorded := recordedSum(previous, rel)
@@ -78,7 +86,7 @@ func (b *Bus) planInstructions(ctx context.Context, plan *profilePlan, previous 
 		return nil
 	}
 
-	file, err := b.storer.QueryShared(ctx, plan.profile.Dir, rel)
+	file, err := plan.files.QueryShared(ctx, rel)
 	if err != nil {
 		return err
 	}
@@ -121,8 +129,8 @@ func (b *Bus) planInstructions(ctx context.Context, plan *profilePlan, previous 
 
 	if needsAsk {
 		plan.asks = append(plan.asks, ask{
-			rel:  rel,
-			path: file.Path,
+			rel:      rel,
+			snapshot: snapshotOf(file),
 			question: Question{
 				Profile: plan.profile.Name.String(),
 				Path:    plan.abs(rel),

@@ -16,7 +16,7 @@ install: build
 
 # test-only runs every test. The tests build the binary themselves.
 test-only:
-	go test ./...
+	go test -count=1 ./...
 
 # lint runs golangci-lint with the default configuration.
 lint:

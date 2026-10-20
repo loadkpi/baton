@@ -8,27 +8,17 @@ import (
 
 	"github.com/loadkpi/baton/business/domain/configbus"
 	"github.com/loadkpi/baton/business/domain/projectbus"
+	"github.com/loadkpi/baton/business/domain/runtimebus"
 	"github.com/loadkpi/baton/business/domain/workbus"
 	"github.com/loadkpi/baton/business/types/agent"
 	"github.com/loadkpi/baton/business/types/runtime"
 	"github.com/loadkpi/baton/business/types/taskref"
 )
 
-// Tab is what a Terminal opens: a tab in Dir, titled Title, that runs Command.
-type Tab struct {
-	// Dir is the working directory of the tab.
-	Dir string
-	// Title is the static title of the tab.
-	Title string
-	// Command is the program and its arguments, as words. The Terminal
-	// decides how to present them to its shell.
-	Command []string
-}
-
 // Terminal is where a Session's Agent runs on screen. Guake is the only
 // implementation in v1; tmux can plug in later (DESIGN.md, D8).
 type Terminal interface {
-	OpenTab(ctx context.Context, tab Tab) error
+	OpenTab(ctx context.Context, tab runtimebus.Tab) error
 }
 
 // Request asks for a new Session.
@@ -48,11 +38,14 @@ type Request struct {
 type Bus struct {
 	terminal Terminal
 	work     *workbus.Bus
+	host     runtimebus.Runtime
 }
 
-// New creates the domain over a Terminal and the domain that decides the Task.
-func New(terminal Terminal, work *workbus.Bus) *Bus {
-	return &Bus{terminal: terminal, work: work}
+// New creates the domain over a Terminal, the domain that decides the Task and
+// the Runtime of Sessions on the host. The other Runtimes join when baton new
+// can start them (ticket 09).
+func New(terminal Terminal, work *workbus.Bus, host runtimebus.Runtime) *Bus {
+	return &Bus{terminal: terminal, work: work, host: host}
 }
 
 // Start makes the Task of the request the current one of the Working copy and
@@ -67,7 +60,17 @@ func (b *Bus) Start(ctx context.Context, r Request) error {
 	if err != nil {
 		return err
 	}
-	tab := hostTab(r, task)
+	tab, err := b.host.Start(ctx, runtimebus.StartRequest{
+		Home:        r.Home,
+		Project:     project.Name,
+		WorkingCopy: r.Place.WorkingCopy,
+		Task:        task.Label(),
+		Agent:       r.Agent,
+		Profile:     r.Profile,
+	})
+	if err != nil {
+		return err
+	}
 	if err := b.terminal.OpenTab(ctx, tab); err != nil {
 		return fmt.Errorf("open a tab for %s: %w", tab.Title, err)
 	}
