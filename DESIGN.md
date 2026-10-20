@@ -100,11 +100,11 @@ flowchart LR
 
 ```
 ~/.config/baton/
-  config.toml                 # source repository path, Profiles and their tags
+  config.toml                 # source repository path, host Profiles (and their tags, ticket 03)
   secrets.env                 # values for ${VAR} placeholders, mode 0600
 ~/.baton/
   bin/baton                   # mounted read-only into sandboxes
-  sync-manifest.json          # per Profile: files sync created, its blocks/keys in shared files
+  manifests/<profile>.json    # per Profile: files sync created, its blocks/keys in shared files
   backups/<profile>/<ts>/     # copies of shared files taken before sync first changed them
   sessions/<agent>-<session>.jsonl   # raw Events of host Sessions, mode 0600
   projects/<project>/         # mounted read-write into this project's sandbox only
@@ -173,6 +173,59 @@ Rules:
 - **Baton's own skills are named `baton-*`.** Built-in items that Baton ships (in v1 only `/baton-handoff`) carry the `baton-` prefix, so they never collide with the user's skills, Claude's synced skills or third-party installs. The prefix is reserved: a source skill named `baton-*` makes sync stop with an error.
 - **No secrets in the source.** Manifests use `${VAR}` placeholders; values come from `~/.config/baton/secrets.env` (0600). A Profile receives only the secrets of the items its tags accept.
 - **Inside the sandbox, `ai-sandbox` owns security and Baton owns content.** `run.sh` regenerates `.codex/config.toml` and `.codex/AGENTS.md` on every run (unless you removed its marker), and these are exactly the files where Codex keeps MCP servers and global instructions. Baton writes only fragments (`config.d/*.toml`, `AGENTS.d/*.md`); a generic fragments mechanism in `ai-sandbox`, or the print-args wrapper, merges them (ADR 0001).
+
+#### Config, source and manifest formats
+
+Decided while building the first `baton sync` (ticket 01). Later tickets add keys and sections to these formats; they do not change the existing ones.
+
+**Baton config: `~/.config/baton/config.toml`.** `~` is `$HOME`; `XDG_CONFIG_HOME` is not consulted, so the location is the one in [Files](#files). TOML, read with `github.com/BurntSushi/toml` (the standard library has no TOML; later tickets also write Codex's TOML, so the dependency pays for itself).
+
+```toml
+source = "~/github/my/agent-config"     # the private source repository
+
+[profiles.claude-personal]              # the table key is the Profile name
+agent = "claude"                        # the only supported value in v1 for host Profiles
+dir   = "~/.claude-personal"            # the Agent's config directory
+```
+
+- `source`, `agent` and `dir` are required. Paths are absolute or start with `~/`; anything else is an error. At least one Profile is required.
+- A Profile name matches `[a-z0-9][a-z0-9._-]*`, because Baton uses it as a file name (manifests, backups).
+- Unknown keys are errors, so a misspelled key is never silently ignored.
+- A missing or invalid config stops `baton` with `baton: <path>: <reason>` on stderr and exit code 1. Usage errors exit with 2.
+- Growth: per-Profile `tags` (ticket 03) goes into the same table; other settings (Telegram, ...) get their own top-level tables. Sandbox Profiles are not listed here, they are derived from the registered Projects. Secrets stay out of this file (`secrets.env`).
+
+**Source repository layout.** The source is read from its working tree, not from git history: uncommitted edits sync too, and sync runs no git commands on it.
+
+```
+<source>/
+  skills/<name>/SKILL.md      # a skill is a directory with SKILL.md; any other files travel with it
+  AGENTS.md                   # instructions (ticket 03)
+  ...                         # MCP manifest (ticket 04): name and format chosen there
+```
+
+- A skill's whole directory is copied verbatim to `<profile dir>/skills/<name>/`, the layout Claude Code reads for user skills ([Claude Code: Skills](https://code.claude.com/docs/en/skills), checked Oct 20, 2026; that page does not say whether the directory follows `CLAUDE_CONFIG_DIR`, so this is [unverified] for relocated Profiles).
+- Entries starting with `.` and plain files directly under `skills/` are ignored. A directory without `SKILL.md` is not a skill: it is skipped with a warning on stderr.
+- File modes are normalized to `0755` (owner-executable in the source) or `0644`, so results do not depend on the umask of the checkout. Symbolic links and special files inside a skill are an error.
+- A source without `skills/` has no skills; a `source` that is not a directory is an error.
+- Where item tags live (frontmatter or a sidecar file) is decided in ticket 03. Whatever it picks must not change how untagged items are copied.
+
+**Manifest: `~/.baton/manifests/<profile>.json`**, one per Profile, mode 0600, written atomically (temp file and rename), and not rewritten when nothing changed.
+
+```json
+{
+  "version": 1,
+  "profile": "claude-personal",
+  "files": [
+    { "path": "skills/greet/SKILL.md" },
+    { "path": "skills/greet/scripts/hello.sh" }
+  ]
+}
+```
+
+- `files` are the files sync created, as slash-separated paths relative to the Profile directory, sorted. Entries are objects so fields can be added. Owned blocks and keys of shared files (ticket 02) go into further top-level arrays next to `files`; an unknown `version` is refused instead of guessed at.
+- The manifest is saved before the files are written, so a sync that dies half-way has already recorded everything it may have created.
+- Sync never creates a Profile directory: a `dir` that does not exist is an error.
+- Until ticket 02 adds the question flow, sync refuses (exit 1, naming each path, writing nothing in any Profile) to write a file that exists but is not in the Profile's manifest. Files it does own are updated in place. Entries of files no longer in the source stay in the manifest; ticket 02 removes those files and entries.
 
 Slash commands, subagents and a unified permission policy (`policy.yaml`) are v2: their formats differ more between the Agents, and Codex prompts can only live at the user level.
 
