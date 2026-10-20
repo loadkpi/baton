@@ -46,3 +46,7 @@ The source repository holds `skills/<name>/SKILL.md` (plus any supporting files)
 - [docs/adr/](docs/adr/): decisions that are hard to reverse.
 - [.scratch/baton-v1/](.scratch/baton-v1/): the v1 spec and its tickets.
 - [AGENTS.md](AGENTS.md): conventions for coding agents working on this repository.
+
+## License
+
+[MIT](LICENSE)
