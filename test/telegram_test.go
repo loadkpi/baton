@@ -37,9 +37,10 @@ type fakeTelegram struct {
 
 	mu       sync.Mutex
 	requests []telegramRequest
-	status   int    // the status every answer has
-	reply    string // the body every answer has
-	redirect string // when set, every request is redirected to this URL
+	status   int           // the status every answer has
+	reply    string        // the body every answer has
+	redirect string        // when set, every request is redirected to this URL
+	delay    time.Duration // how long every answer is held back
 }
 
 func newFakeTelegram(t *testing.T) *fakeTelegram {
@@ -49,8 +50,9 @@ func newFakeTelegram(t *testing.T) *fakeTelegram {
 		body, _ := io.ReadAll(r.Body)
 		f.mu.Lock()
 		f.requests = append(f.requests, telegramRequest{Method: r.Method, Path: r.URL.Path, Body: string(body)})
-		status, reply, redirect := f.status, f.reply, f.redirect
+		status, reply, redirect, delay := f.status, f.reply, f.redirect, f.delay
 		f.mu.Unlock()
+		time.Sleep(delay)
 		if redirect != "" {
 			http.Redirect(w, r, redirect+r.URL.Path, http.StatusTemporaryRedirect)
 			return
@@ -68,6 +70,13 @@ func (f *fakeTelegram) answer(status int, body string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.status, f.reply = status, body
+}
+
+// slowDown holds every answer back by d, after the request is recorded.
+func (f *fakeTelegram) slowDown(d time.Duration) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.delay = d
 }
 
 // redirectTo makes the server answer every request with a redirect to url.

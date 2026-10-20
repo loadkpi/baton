@@ -69,8 +69,29 @@ func runWatch(ctx context.Context, c console, home string, args []string) int {
 		return c.usagef("watch: --interval must be positive")
 	}
 
-	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
-	defer stop()
+	// The signal ends the loop and nothing else. A look that has started,
+	// and the notifications it decided to send, run on ctx, which a signal
+	// does not cancel: stopping the watcher (systemd stop or restart) must not
+	// kill a notify-send or a Telegram request in flight and print a warning
+	// for it. Every delivery has its own time limit, so the wait is bounded.
+	//
+	// The first signal also gives the signals back to the system: a second
+	// one ends the process at once, for a user who does not want to wait.
+	sigs := make(chan os.Signal, 1)
+	signal.Notify(sigs, os.Interrupt, syscall.SIGTERM)
+	stopping := make(chan struct{})
+	finished := make(chan struct{})
+	defer close(finished)
+	defer signal.Stop(sigs)
+	go func() {
+		select {
+		case <-sigs:
+			signal.Stop(sigs)
+			c.println("stopping: finishing the notification being sent (signal again to stop at once)")
+			close(stopping)
+		case <-finished:
+		}
+	}()
 
 	bus := newWatchBus(home, readerConfig(ctx, c, home))
 	warned := warnings{c: c}
@@ -85,9 +106,14 @@ func runWatch(ctx context.Context, c console, home string, args []string) int {
 	defer ticker.Stop()
 	for {
 		select {
-		case <-ctx.Done():
+		case <-stopping:
 			return exitOK
 		case <-ticker.C:
+		}
+		select {
+		case <-stopping:
+			return exitOK // both were ready: no new look after a signal
+		default:
 		}
 		ws, err := bus.Look(ctx)
 		if err != nil {

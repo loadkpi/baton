@@ -127,8 +127,15 @@ func (p *Process) Interrupt() Result {
 // Signal sends sig and waits for the process to end like Stop.
 func (p *Process) Signal(sig syscall.Signal) Result {
 	p.t.Helper()
-	_ = p.cmd.Process.Signal(sig)
+	p.SendSignal(sig)
 	return p.Wait()
+}
+
+// SendSignal sends sig without waiting, for a test that sends a second one
+// or looks at what the process does in between.
+func (p *Process) SendSignal(sig syscall.Signal) {
+	p.t.Helper()
+	_ = p.cmd.Process.Signal(sig)
 }
 
 // Wait waits, without signalling, for the process to end on its own and

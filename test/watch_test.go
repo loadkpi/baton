@@ -4,6 +4,7 @@ import (
 	"os"
 	"reflect"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -478,5 +479,83 @@ func TestWatch_StartsWithNoSessionsAndSaysWhatItIsDoing(t *testing.T) {
 	}
 	if got := p.Stderr(); got != "" {
 		t.Errorf("stderr = %q, want nothing", got)
+	}
+}
+
+// slowDesktop makes notify-send take a second to show a notification: the
+// call is recorded when it starts, and the notification is on screen (a file
+// exists) when it ends.
+func slowDesktop(env *batontest.Env) (shown string) {
+	shown = env.Path("shown-on-desktop")
+	env.Stub("notify-send", batontest.WithScript("sleep 1; : > "+shown))
+	return shown
+}
+
+func TestWatch_AStopLetsTheNotificationBeingShownFinish(t *testing.T) {
+	env := newEnv(t)
+	repo, p := watchRepo(t, env)
+	shown := slowDesktop(env)
+	hostEvent(t, env, "s1", "2031-03-04T10:00:00Z", "SessionStart", repo, p)
+	w := startWatch(t, env)
+	hostEvent(t, env, "s1", "2031-03-04T10:00:05Z", "PermissionRequest", repo, p)
+	notifications(t, env, 1) // notify-send is running now, and will take a second
+
+	res := w.Stop()
+
+	if res.ExitCode != 0 {
+		t.Errorf("exit code = %d, want 0; stderr=%q", res.ExitCode, res.Stderr)
+	}
+	if lines := warningLines(res.Stderr); len(lines) != 0 {
+		t.Errorf("warnings = %q, want none for a stop", lines)
+	}
+	if !env.Exists(shown) {
+		t.Error("the notification was cut off by the stop, want it shown")
+	}
+}
+
+func TestWatch_AStopLetsTheTelegramMessageBeingSentFinish(t *testing.T) {
+	env, fake, repo, p := telegramEnv(t)
+	fake.slowDown(time.Second)
+	hostEvent(t, env, "s1", "2031-03-04T10:00:00Z", "SessionStart", repo, p)
+	if res := env.Run("away"); res.ExitCode != 0 {
+		t.Fatalf("away: exit %d, stderr=%q", res.ExitCode, res.Stderr)
+	}
+	w := startWatch(t, env)
+	hostEvent(t, env, "s1", "2031-03-04T10:00:05Z", "PermissionRequest", repo, p)
+	fake.waitFor(1) // the request is on its way, and the answer is a second late
+
+	res := w.Stop()
+
+	if res.ExitCode != 0 {
+		t.Errorf("exit code = %d, want 0; stderr=%q", res.ExitCode, res.Stderr)
+	}
+	if lines := warningLines(res.Stderr); len(lines) != 0 {
+		t.Errorf("warnings = %q, want none for a stop", lines)
+	}
+	if calls := env.Calls("notify-send"); len(calls) != 0 {
+		t.Errorf("notify-send calls = %v, want none: the message was delivered to Telegram", calls)
+	}
+}
+
+func TestWatch_ASecondSignalEndsTheWatcherAtOnce(t *testing.T) {
+	env := newEnv(t)
+	repo, p := watchRepo(t, env)
+	env.Stub("notify-send", batontest.WithScript("sleep 30"))
+	hostEvent(t, env, "s1", "2031-03-04T10:00:00Z", "SessionStart", repo, p)
+	w := startWatch(t, env)
+	hostEvent(t, env, "s1", "2031-03-04T10:00:05Z", "PermissionRequest", repo, p)
+	notifications(t, env, 1)
+
+	w.SendSignal(syscall.SIGTERM)
+	w.WaitStdout("stopping") // the first signal is taken, and the watcher waits for notify-send
+	start := time.Now()
+	w.SendSignal(syscall.SIGTERM)
+	res := w.Wait()
+
+	if res.ExitCode == 0 {
+		t.Errorf("exit code = 0 after a second signal, want the process ended by it")
+	}
+	if took := time.Since(start); took > 5*time.Second {
+		t.Errorf("the second signal took %s to end the watcher, want it at once", took)
 	}
 }
