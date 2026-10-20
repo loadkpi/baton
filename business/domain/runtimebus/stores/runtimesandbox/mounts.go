@@ -144,3 +144,17 @@ func (r *Runtime) HostPath(_ context.Context, project projectname.Name, p string
 	}
 	return filepath.Join(best.Host, filepath.FromSlash(strings.TrimPrefix(p, best.Container))), nil
 }
+
+// ContainerPath maps a file under the Project's Baton directory to where the
+// container mounts that directory (ContainerProject). Nothing else of ~/.baton
+// is mounted, and a path elsewhere on the host is not assumed to be visible.
+// The mount is fixed by Start, so unlike HostPath this needs no record of a
+// container that already ran.
+func (r *Runtime) ContainerPath(_ context.Context, project projectname.Name, p string) (string, error) {
+	dir := filepath.Join(r.batonDir, "projects", project.String())
+	rel, err := filepath.Rel(dir, filepath.Clean(p))
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("%s is not under %s, the only part of ~/.baton that the container of project %s sees", p, dir, project)
+	}
+	return path.Join(ContainerProject, filepath.ToSlash(rel)), nil
+}

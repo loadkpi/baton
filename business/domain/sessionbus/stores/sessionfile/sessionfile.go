@@ -183,8 +183,12 @@ func (s *Store) QueryEventsBackward(_ context.Context, ref sessionbus.SessionRef
 	})
 }
 
-// toBusEvent parses one line. The payload is not needed to list Sessions and is
-// left alone.
+// QueryPath returns the path of the file of the Session.
+func (s *Store) QueryPath(ref sessionbus.SessionRef) string {
+	return s.refPath(ref)
+}
+
+// toBusEvent parses one line.
 func toBusEvent(line []byte) (sessionbus.Event, error) {
 	var fe fileEvent
 	if err := json.Unmarshal(line, &fe); err != nil {
@@ -212,6 +216,6 @@ func toBusEvent(line []byte) (sessionbus.Event, error) {
 	return sessionbus.Event{
 		TS: ts, Agent: a, Profile: p, Runtime: r, Host: fe.Host,
 		AgentPID: fe.AgentPID, AgentStart: fe.AgentStart, AgentPIDFallback: fe.AgentPIDFallback,
-		SessionID: fe.SessionID, Name: fe.Event, CWD: fe.CWD,
+		SessionID: fe.SessionID, Name: fe.Event, CWD: fe.CWD, Payload: fe.Payload,
 	}, nil
 }

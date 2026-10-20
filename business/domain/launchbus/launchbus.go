@@ -36,6 +36,8 @@ type Request struct {
 	Task    taskref.Ref
 	Agent   agent.Agent
 	Profile configbus.Profile
+	// Prompt is the first message of the Session; empty for none.
+	Prompt string
 }
 
 // Bus is the domain of starting Sessions.
@@ -54,15 +56,14 @@ func New(terminal Terminal, work *workbus.Bus, sessions *sessionbus.Bus, runtime
 	return &Bus{terminal: terminal, work: work, sessions: sessions, runtimes: runtimes}
 }
 
-// Start makes the Task of the request the current one of the Working copy and
-// opens a tab that runs the Agent in it. Nothing is changed when the Project's
-// Runtime cannot be started yet, when its Sessions may not run in this Working
-// copy or when the Working copy has an active Session.
-func (b *Bus) Start(ctx context.Context, r Request) error {
+// Check refuses a request that Start could never carry out, without changing
+// anything: the Project's Runtime cannot be started yet, or its Sessions may not
+// run in this Working copy. Start checks first thing, and a caller that does
+// work before it (a Handoff waits, then writes) asks earlier.
+func (b *Bus) Check(r Request) error {
 	project := r.Place.Project
-	rt, ok := b.runtimes[project.Runtime]
-	if !ok {
-		return fmt.Errorf("project %s runs in the %s Runtime, which baton new cannot start yet", project.Name, project.Runtime)
+	if _, ok := b.runtimes[project.Runtime]; !ok {
+		return fmt.Errorf("project %s runs in the %s Runtime, which baton cannot start yet", project.Name, project.Runtime)
 	}
 	// A git worktree stores the host path of its git directory, which does not
 	// exist inside a container, and has no sandbox of its own (DESIGN.md, D3).
@@ -70,6 +71,36 @@ func (b *Bus) Start(ctx context.Context, r Request) error {
 		return fmt.Errorf("project %s runs in the %s Runtime, whose Sessions run only in the main checkout %s, not in the worktree %s",
 			project.Name, project.Runtime, project.Path, r.Place.WorkingCopy)
 	}
+	return nil
+}
+
+// SelectProfile returns the host Profile a Session of the Agent starts under
+// in the Project, from the user's choice (the zero value for none), or the zero
+// Profile for a Project whose Runtime has Profiles of its own. It refuses what
+// cannot run: Codex on the host, and a choice of Profile in a sandbox.
+func SelectProfile(cfg configbus.Config, project projectbus.Project, a agent.Agent, chosen profilename.Name) (configbus.Profile, error) {
+	switch {
+	case project.Runtime == runtime.Host:
+		if a == agent.Codex {
+			return configbus.Profile{}, fmt.Errorf("project %s runs in the %s Runtime; %s runs only in a sandbox (a Project with .ai-sandbox/run.sh)", project.Name, project.Runtime, a)
+		}
+		return cfg.SelectProfile(a, chosen)
+	case chosen != (profilename.Name{}):
+		return configbus.Profile{}, fmt.Errorf("project %s runs in the %s Runtime, which has Profiles of its own; --profile applies to host Sessions only", project.Name, project.Runtime)
+	}
+	return configbus.Profile{}, nil
+}
+
+// Start makes the Task of the request the current one of the Working copy and
+// opens a tab that runs the Agent in it. Nothing is changed when the Project's
+// Runtime cannot be started yet, when its Sessions may not run in this Working
+// copy or when the Working copy has an active Session.
+func (b *Bus) Start(ctx context.Context, r Request) error {
+	if err := b.Check(r); err != nil {
+		return err
+	}
+	project := r.Place.Project
+	rt := b.runtimes[project.Runtime]
 	task, err := b.work.Begin(ctx, r.Place, r.Task)
 	if err != nil {
 		return err
@@ -82,6 +113,7 @@ func (b *Bus) Start(ctx context.Context, r Request) error {
 		Task:        task.Label(),
 		Agent:       r.Agent,
 		Profile:     r.Profile,
+		Prompt:      r.Prompt,
 	})
 	if err != nil {
 		return err

@@ -105,11 +105,30 @@ func (p *Process) wait(name, want string, read func() string) {
 // it and returns what it wrote and its exit code (-1 when a signal ended it).
 func (p *Process) Stop() Result {
 	p.t.Helper()
-	_ = p.cmd.Process.Signal(syscall.SIGTERM)
+	return p.Signal(syscall.SIGTERM)
+}
+
+// Interrupt sends SIGINT, the Ctrl-C of a terminal, and waits like Stop.
+func (p *Process) Interrupt() Result {
+	p.t.Helper()
+	return p.Signal(syscall.SIGINT)
+}
+
+// Signal sends sig and waits for the process to end like Stop.
+func (p *Process) Signal(sig syscall.Signal) Result {
+	p.t.Helper()
+	_ = p.cmd.Process.Signal(sig)
+	return p.Wait()
+}
+
+// Wait waits, without signalling, for the process to end on its own and
+// returns what it wrote and its exit code (-1 when a signal ended it).
+func (p *Process) Wait() Result {
+	p.t.Helper()
 	select {
 	case <-p.done:
 	case <-time.After(processTimeout):
-		p.t.Fatal("baton did not end after SIGTERM")
+		p.t.Fatalf("baton did not end; stdout=%q stderr=%q", p.Stdout(), p.Stderr())
 	}
 	res := Result{Stdout: p.Stdout(), Stderr: p.Stderr()}
 	var exitErr *exec.ExitError

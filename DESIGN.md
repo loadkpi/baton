@@ -115,8 +115,9 @@ flowchart LR
     current.jsonl             # journal: Working copy, Task, since when it is current
     .lock                     # serializes changes to tasks/ and current.jsonl
     sessions/<agent>-<session>.jsonl # raw Events of sandbox Sessions, mode 0600
-    handoffs/<task>/<n>.md
-    handoffs/<task>/draft.md  # narrative part saved before the Handoff is assembled
+    handoffs/<task-id>/<n>.md # the Task's id, not its name (ticket 14)
+    handoffs/<task-id>/draft.md  # narrative part saved before the Handoff is assembled
+    handoffs/<task-id>/.lock  # serializes the writers of one Task's Handoffs
 ```
 
 ## Key decisions
@@ -492,6 +493,7 @@ type Runtime interface {
     Start(ctx, StartRequest) (Tab, error)      // how to start an Agent: the tab to open
     Targets(ctx, configbus.Config) ([]syncbus.Target, []string, error) // Profiles to sync, with the means to write
     HostPath(ctx, projectname.Name, string) (string, error) // a path inside the Project's container, as a host path
+    ContainerPath(ctx, projectname.Name, string) (string, error) // a host path as the Runtime sees it (ticket 14)
     Alive(ctx, []Process) ([]Liveness, error)  // do the Agent processes of these Sessions still run (batched since ticket 11)
 }
 ```
@@ -526,6 +528,51 @@ A Handoff lives in `~/.baton/projects/<project>/handoffs/<task>/<n>.md`, never i
 - **If the handing-over Session could not write the narrative part** (for example, its limit ran out), the first message also asks the receiving Session to write it from the automatic part and the Event tail and save it with `baton handoff save`. `save` fills the Task's latest `<n>.md` when it has no narrative part, and writes a draft for the next Handoff otherwise.
 - **The header records who wrote the narrative part:** `narrative: handing-over`, `receiving` or `missing`. Known edge, accepted for v1: if a receiver never filled its Handoff, the next `/baton-handoff` fills that old one instead of starting a draft.
 - A Handoff to a sandbox Agent from a Working copy other than the main checkout is refused (D3).
+
+#### `baton handoff` (ticket 14)
+
+**What was checked** (Oct 20, 2026).
+
+- *Interactive `codex` takes an initial prompt as a positional argument.* `codex --help` (0.162.1, run in the `ai-sandbox` image) prints `Usage: codex [OPTIONS] [PROMPT]`. `claude --help` (2.1.304, host) prints `Usage: claude [options] [command] [prompt]`. Both were read from the help text; neither was started with a prompt here, so that the prompt really starts the conversation in the TUI (and is not, say, ignored when a Profile asks a first-run question) is [unverified].
+- *`PostToolUse` payloads do not carry the exit code of a command.* Read from the vendors' hook references with WebFetch:
+  - **Claude Code** ([hooks](https://code.claude.com/docs/en/hooks)): `PostToolUse` "fire[s] after a tool has already executed successfully"; the schema of `tool_response` "depends on the tool", the only example is `Write`, and the only documented shape of Bash's output is `{stdout, stderr, interrupted, isImage}` (plus `bashEditDiff`): **no exit code field**. A command that fails goes to **`PostToolUseFailure`**, whose `error` is "Exit code N" on the first line for Bash and PowerShell, then the output; the docs say to key on that first line and to treat the rest as display text. `is_interrupt: true` marks an abort, with no code.
+  - **Codex** ([hooks](https://learn.chatgpt.com/docs/hooks)): shell commands match as `Bash`, `tool_input.command` holds the command, and `PostToolUse` also runs after a command that exits non-zero; `tool_response` is "tool-specific output" with no documented shape for Bash (the page has no example), so **there is no documented exit code**, and there is no `PostToolUseFailure`.
+- *What the automatic part does with that.* A command is a `PostToolUse` or `PostToolUseFailure` Event whose `tool_name` is `Bash` (the finished ones; one that was running when the Session stopped has no such Event). Claude `PostToolUse`: exit `0`, **inferred** from the rule that the hook fires only on success, not seen in a recording [unverified]. Claude `PostToolUseFailure`: the number from the `Exit code N` line; `?` when the line is not there. Codex: always `?`. No field is guessed: when a recording of a Codex `tool_response` shows a code, `sessionbus.toBusCommand` is the one place to read it.
+
+**The command.** `baton handoff <project>/<task> --to <agent>[@<profile>]`, the Task written as `baton task` and the tab titles write it (a name or an id). The Runtime is the Project's (a Project with `.ai-sandbox/run.sh` hands over into its sandbox, so `--to codex` works there and `@profile` is refused, as `--profile` is for `baton new`; any other Project hands over into a host Claude Profile, the default one when `@profile` is left out). There is no `--runtime`: moving a Task from a sandbox Session to a host Agent of the same Project is not possible yet. The code is `handoffbus` (`Prepare`, `Wait`, `Complete`); the receiving Session is started by `launchbus.Start`, the same path as `baton new`, which gained `Request.Prompt` and the Runtimes `StartRequest.Prompt`. `launchbus.SelectProfile` is the Profile rule that `baton new` had inline.
+
+1. **Prepare** (everything that can be refused is refused here, before waiting or writing): the Task and the Working copy of its most recently active Session (the Handoff is for that Working copy); no Session of the Task is an error; the Agent and Profile rules of `baton new`; the sandbox rule "main checkout only" (`launchbus.Check`). Reading the Sessions registers the Projects they are in, so a Project that only ever had Sessions started by hand is known to `handoff`.
+2. **Wait.** If any Session is active in that Working copy (not only the Task's own: the one-active-Session rule is per Working copy), the command prints `waiting for the <agent> session <id> of <project>/<task> (profile <p>, <status>) to end; type /exit there, or end its process` to stdout and re-reads the Sessions through `workbus.List` every 500 ms until none is: a `SessionEnd` Event, or `lost` (dead PID, container gone, as for `baton ls`). The Event files are the only thing it watches. SIGINT or SIGTERM during `Prepare` or the wait: `baton: interrupted; no Handoff was written and no Session was started`, exit 130. After the wait the signal handler is removed, so a later signal ends the process by default; the file is written atomically, so there is a whole file or none.
+3. **Complete**, after the wait so that the facts are fresh: re-read the Sessions, take the git state, read the Events, join the draft, write `<n>.md`, remove the draft, start the Session. A start that fails (Docker, Guake) leaves the Handoff in place; the error names it.
+
+**The file** (`handoffs/<task-id>/<n>.md`, atomic, mode 0600, directory 0700, `<n>` is one more than the highest `<n>.md`, all under the lock of the Task). The directory is the Task's **id**, not its name (a name can change; `taskfile` does the same), a decision the spec's `<task>` left open.
+
+```
+---
+task: <project>/<task id>
+handoff: <n>
+narrative: handing-over | receiving | missing
+created: <RFC 3339, UTC>
+---
+
+# Handoff <n> of <project>/<task id>
+
+## Facts            task, name, project, working copy, branch, HEAD (hash and subject),
+                    the Session handed over (agent, profile, runtime, id, status),
+                    the path of its Event file, where the Task goes
+### git status / ### git diff --stat / ### git diff --cached --stat (only when something is staged)
+### Last commands that finished (up to 10), oldest first     "N. exit <code or ?>, <time>" and the command in a code block
+
+## Narrative        the draft, or a placeholder when `narrative: missing`
+```
+
+- *The narrative part is the last section and runs to the end of the file*, under the exact line `## Narrative` (`handoffbus.NarrativeHeading`), so that Markdown headings inside what a Session wrote cannot be mistaken for the end of it. **Ticket 15** fills it by replacing everything after that line and setting `narrative: receiving` in the header (the placeholder is `handoffbus.missingText`); `Storer` already has `QueryDraft`, `QueryNext`, `SaveHandoff`, `DeleteDraft` and `Lock`, and `handofffile` is where `save` adds its reading of the latest `<n>.md` and its write of `draft.md`. The first message is built in one place, `handoffbus.firstMessage`; ticket 15 adds the request to write the narrative there. It must stay **one line**: the Terminal types it into a shell. A draft that holds only white space counts as no draft and is left alone.
+- *The commands are those of the Session handed over* (the Task's most recently active one), the last ten, at most 1000 bytes each (a longer one ends with `... (N more bytes not shown)`), in fences that are longer than any run of backticks in them.
+- *git*: `git status --short`, `git diff --stat`, `git diff --cached --stat`, run with `--no-optional-locks`; the branch is `(detached HEAD)` when there is none, and a repository with no commit says so.
+- *The link to the Event file is a host path.* A sandbox receiver sees it only if the file is one of a sandbox Session of that Project (`/baton/project/sessions/...`); the Event file of a host Session is not mounted. The receiving Session gets the Handoff itself, which is mounted.
+- *The first message* is `continue the Task from Handoff <path>`, with the path **as the receiving Runtime sees it**: `Runtime.ContainerPath` (host: the path; sandbox: `/baton/project/handoffs/<task-id>/<n>.md`, from the fixed mount of the Project's directory, which needs no record of an earlier container). The message is the last word of the Agent's command (`claude '<message>'`, and in the sandbox after `env -u ... codex`, outside what `run.sh` prints).
+- **Known exposure.** The commands are written as the Events recorded them, and a command string can hold a secret the user typed or an Agent composed (a token in a `curl` header). The spec wants the commands, so they are kept, not masked; the file is 0600 and stays under `~/.baton`, like the Event files it is taken from (D7). A sandbox Agent can read it through the mount (and the receiving Agent will, by design). Nothing in a Handoff goes to Telegram or a notification.
+- *Accepted for v1*: if the process dies between writing `<n>.md` and removing the draft, the next Handoff uses the stale draft; two `baton handoff` of one Task at once are serialized by the lock but both start a Session (the second is refused by the one-active-Session rule if the first started already).
 
 Collecting failed tests (first draft D5) is dropped for v1: parsing test output of different projects costs more than exit codes give.
 
@@ -626,7 +673,7 @@ tmux is not installed today. It is tried for a week inside Guake with an "invisi
 | Scope creep into an "IDE for agents" | High | v1 is five goals; everything else is listed in v2 with no design work until v1 is used daily |
 | `AI_SANDBOX_PRINT_ARGS` format changes | Low | It is covered by `ai-sandbox`'s own tests; ADR 0001 marks it as a contract |
 | An Agent in a sandbox tampers with Baton files of its Project | Low | Only that Project's directory is mounted; the binary is read-only; Events are an audit trail, not a security boundary |
-| Secrets in the Event archive or in Profiles | Medium | 0600 files, no command output in Telegram, secrets reach a Profile only through its tags |
+| Secrets in the Event archive, in Handoffs or in Profiles | Medium | 0600 files (a Handoff holds command strings from Events as recorded, D5), no command output in Telegram, secrets reach a Profile only through its tags |
 | Sync overwrites something it does not own | Medium | Manifest of owned files and of owned parts of shared files; diff, question and backup before the first change to a shared file; stop when there is no terminal to ask in |
 | Codex Sessions in a new sandbox stay invisible | Medium | `baton ls` flags Codex Sessions without Events and points to `/hooks` |
 | Terms-of-use violation | Low while personal | Official CLIs only, no tokens in code, API keys removed from the environment, everything for one user |
@@ -667,11 +714,11 @@ Four stages; each is usable on its own.
 
 ## Open questions
 
-- [ ] Does `codex` accept an initial prompt as a positional argument in interactive mode? Needed for D5. [unverified]
+- [x] Does `codex` accept an initial prompt as a positional argument in interactive mode? Yes per `codex --help` (0.162.1: `Usage: codex [OPTIONS] [PROMPT]`); `claude --help` (2.1.304) has `[prompt]` too (D5, ticket 14). That the TUI really starts on it was not tried [unverified].
 - [x] What does the `NEW_TAB` argument of `guake -n` mean exactly? The working directory of the new tab, and `-n` does nothing when `-e` is given (D8, ticket 06). Guake itself was not driven, so how it behaves live is still [unverified].
 - [ ] Is the hook's parent process the Agent or a `sh -c` wrapper? Ticket 05 finds the Agent by walking up the chain, so it works either way, and records when it had to fall back to the direct parent (`agent_pid_fallback`). The question stays open until the chain is recorded under a live Agent. [unverified]
 - [x] Do Codex hook payloads use the same field names as Claude's (`session_id`, `hook_event_name`, `cwd`)? Yes, per the Codex hooks page (ticket 10); what Codex really sends is still [unverified] (no recording).
-- [ ] Do `PostToolUse` payloads of both Agents carry the command's exit code? Needed for the automatic part of a Handoff (D5). [unverified]
+- [x] Do `PostToolUse` payloads of both Agents carry the command's exit code? No, per both vendors' docs (D5, ticket 14): Claude's Bash `tool_response` has none and its failures arrive as `PostToolUseFailure` with `Exit code N` in `error`; Codex documents no shape. A Handoff shows `?` where it is not known. What the Agents really send is still [unverified] (no recording).
 - [ ] Does Claude rewrite its MCP configuration (`.claude.json`) while running? Yes, per the docs; whether a merge by sync can be lost is still [unverified]; the file location was observed (see [MCP and secrets](#mcp-and-secrets-ticket-04)). `claude mcp add-json --scope user` was not tried.
 - [x] Does `run.sh` regenerate Codex `hooks.json` or the skills directory in the sandbox, as it does `config.toml` and `AGENTS.md`? No (ticket 08, commit `ddaec7d` of `ai-sandbox`; a test runs a copy of `run.sh` to show it). Only those two files, and the project's `.claude/settings.local.json`, which is not part of a Profile.
 - [ ] tmux experiment result: does it stay as the default Terminal?

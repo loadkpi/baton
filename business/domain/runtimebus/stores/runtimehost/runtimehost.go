@@ -52,6 +52,9 @@ func (*Runtime) Start(_ context.Context, r runtimebus.StartRequest) (runtimebus.
 		command = append(command, "CLAUDE_CONFIG_DIR="+r.Profile.Dir)
 	}
 	command = append(command, r.Agent.Binary())
+	if r.Prompt != "" {
+		command = append(command, r.Prompt)
+	}
 
 	title := r.Project.String() + "/" + r.Task + ":" + r.Agent.String()
 	return runtimebus.Tab{Dir: r.WorkingCopy, Title: title, Command: command}, nil
@@ -82,6 +85,11 @@ func (*Runtime) Targets(_ context.Context, cfg configbus.Config) ([]syncbus.Targ
 // HostPath is filled in when a ticket needs it.
 func (*Runtime) HostPath(context.Context, projectname.Name, string) (string, error) {
 	return "", runtimebus.ErrNotImplemented
+}
+
+// ContainerPath is the path itself: the Agent runs on the host.
+func (*Runtime) ContainerPath(_ context.Context, _ projectname.Name, p string) (string, error) {
+	return p, nil
 }
 
 // Alive checks /proc: a Process runs when its PID exists, is not a zombie or dead

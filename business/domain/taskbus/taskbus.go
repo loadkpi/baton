@@ -253,3 +253,16 @@ func (b *Bus) change(ctx context.Context, project projectname.Name, ref taskref.
 	}
 	return t, nil
 }
+
+// Lookup returns the Task a ref points at. Unlike Select it never makes one.
+func (b *Bus) Lookup(ctx context.Context, project projectname.Name, ref taskref.Ref) (Task, error) {
+	tasks, err := b.storer.QueryTasks(ctx, project)
+	if err != nil {
+		return Task{}, err
+	}
+	t, ok := find(tasks, ref)
+	if !ok {
+		return Task{}, fmt.Errorf("project %s has no task %s", project, ref)
+	}
+	return t, nil
+}

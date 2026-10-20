@@ -176,3 +176,64 @@ func Locate(ctx context.Context, dir string) (repo Repo, ok bool, err error) {
 	}
 	return repo, true, nil
 }
+
+// Snapshot is the state of a work tree at one moment, as `git` prints it.
+type Snapshot struct {
+	// Branch is the checked-out branch; empty for a detached HEAD.
+	Branch string
+	// Head is the full hash of HEAD; empty for a repository with no commit.
+	Head string
+	// Subject is the first line of the message of HEAD.
+	Subject string
+	// Status is `git status --short`: staged, unstaged and untracked paths.
+	Status string
+	// DiffStat is `git diff --stat`: unstaged changes to tracked files.
+	DiffStat string
+	// StagedStat is `git diff --cached --stat`: what is staged.
+	StagedStat string
+}
+
+// Take reads the Snapshot of the work tree at dir. It takes no locks in the
+// repository (`--no-optional-locks`), so it is safe beside a running Agent.
+func Take(ctx context.Context, dir string) (Snapshot, error) {
+	var s Snapshot
+	var err error
+
+	// symbolic-ref works before the first commit and fails on a detached HEAD.
+	if out, rc := gitOut(ctx, dir, "symbolic-ref", "--short", "-q", "HEAD"); rc == nil {
+		s.Branch = strings.TrimSpace(out)
+	}
+	if out, rc := gitOut(ctx, dir, "rev-parse", "--verify", "-q", "HEAD"); rc == nil {
+		s.Head = strings.TrimSpace(out)
+		if out, err = gitOut(ctx, dir, "log", "-1", "--format=%s", "HEAD"); err != nil {
+			return Snapshot{}, err
+		}
+		s.Subject = strings.TrimSpace(out)
+	}
+	if s.Status, err = gitOut(ctx, dir, "status", "--short"); err != nil {
+		return Snapshot{}, err
+	}
+	if s.DiffStat, err = gitOut(ctx, dir, "diff", "--stat"); err != nil {
+		return Snapshot{}, err
+	}
+	if s.StagedStat, err = gitOut(ctx, dir, "diff", "--cached", "--stat"); err != nil {
+		return Snapshot{}, err
+	}
+	s.Status, s.DiffStat, s.StagedStat = strings.TrimRight(s.Status, "\n"), strings.TrimRight(s.DiffStat, "\n"), strings.TrimRight(s.StagedStat, "\n")
+	return s, nil
+}
+
+// gitOut runs git in dir and returns what it printed.
+func gitOut(ctx context.Context, dir string, args ...string) (string, error) {
+	cmd := exec.CommandContext(ctx, "git", append([]string{"--no-optional-locks", "-C", dir}, args...)...)
+	cmd.Env = append(cleanEnv(), "LC_ALL=C")
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	if err := cmd.Run(); err != nil {
+		if errors.Is(err, exec.ErrNotFound) {
+			return "", fmt.Errorf("git is needed to describe %s: %w", dir, err)
+		}
+		return "", fmt.Errorf("git %s in %s: %w: %s", args[0], dir, err, strings.TrimSpace(stderr.String()))
+	}
+	return stdout.String(), nil
+}

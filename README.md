@@ -22,8 +22,9 @@ Work in progress: v1 is built ticket by ticket ([.scratch/baton-v1/issues](.scra
 | `baton task name/status` | Name an unnamed Task, mark it `open`, `done` or `dropped`. | — |
 | `baton watch`, `watch install` | Desktop notifications for approvals, long turns and lost Sessions; a `systemd --user` unit. | Not yet on a real desktop or user manager. |
 | `baton away` / `back` | Notifications go to Telegram (Bot API `sendMessage`, one-way) while away. | Request shape checked against the Bot API docs; never sent to real Telegram. |
+| `baton handoff` | `baton handoff <project>/<task> --to <agent>[@<profile>]` waits (saying so) until the Task's Session ends or is lost, writes a Handoff (git state, last 10 commands, Event file link, a saved narrative if any) to `~/.baton/projects/<project>/handoffs/` and opens a Session of the other Agent or Profile whose first message points to it. | Not yet: neither Agent's TUI was started with the prompt, and exit codes are `?` for Codex and inferred for Claude (see DESIGN.md, D5). |
 
-Not built yet: `baton handoff` and the `compose` Runtime (an Agent inside a project's Docker Compose dev container). Not recorded yet: real hook payloads of a full interactive Session (the test fixtures come from the vendors' documentation).
+Not built yet: `baton handoff save`, the `/baton-handoff` skill (so a Handoff has `narrative: missing` unless a draft file is written by hand) and the `compose` Runtime (an Agent inside a project's Docker Compose dev container). Not recorded yet: real hook payloads of a full interactive Session (the test fixtures come from the vendors' documentation).
 
 ## Build and test
 

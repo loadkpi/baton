@@ -77,6 +77,11 @@ func (r *Runtime) Start(ctx context.Context, req runtimebus.StartRequest) (runti
 	}
 	words = append(words, printed.image)
 	words = append(words, command...)
+	if req.Prompt != "" {
+		// After the command run.sh printed: the prompt is for the Agent, and
+		// run.sh has no use for it.
+		words = append(words, req.Prompt)
+	}
 
 	if err := r.saveMounts(project.Name, append(mountsOf(printed.options), batonMounts...)); err != nil {
 		return runtimebus.Tab{}, err

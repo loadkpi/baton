@@ -41,6 +41,11 @@ type StartRequest struct {
 	Task    string
 	Agent   agent.Agent
 	Profile configbus.Profile
+	// Prompt is the first message of the Session, given to the Agent as its
+	// initial prompt (both Agents take it as a positional argument, DESIGN.md,
+	// D5). Empty for a Session that starts with nothing to say. It should be
+	// one line: the Terminal types the command into a shell.
+	Prompt string
 }
 
 // Process identifies a running Agent as its hook recorded it: the host name
@@ -84,6 +89,10 @@ type Runtime interface {
 	// Project's: the mounts of two Projects' containers differ, so the Project
 	// says which one the path is seen from.
 	HostPath(ctx context.Context, project projectname.Name, p string) (string, error)
+	// ContainerPath is the inverse of HostPath: the path under which the
+	// Runtime sees a file of the host, so that a message to an Agent in it can
+	// name the file. A path the Runtime cannot see is an error.
+	ContainerPath(ctx context.Context, project projectname.Name, p string) (string, error)
 	// Alive tells for each Process whether the Agent still runs; the answers
 	// are in the order of the processes. It takes all the Processes of a
 	// check at once so that a container Runtime can ask Docker once for all

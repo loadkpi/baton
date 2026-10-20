@@ -70,17 +70,9 @@ func runNew(ctx context.Context, c console, home string, args []string) int {
 
 	// The Profile of a host Session is chosen from the config; the Profiles
 	// inside a sandbox are the Project's own (<project>.<agent>) and are not.
-	var profile configbus.Profile
-	switch {
-	case place.Project.Runtime == runtime.Host:
-		if a == agent.Codex {
-			return c.errorf("project %s runs in the %s Runtime; %s runs only in a sandbox (a Project with .ai-sandbox/run.sh)", place.Project.Name, place.Project.Runtime, a)
-		}
-		if profile, err = cfg.SelectProfile(a, chosen); err != nil {
-			return c.errorf("%v", err)
-		}
-	case parsed.profile != "":
-		return c.errorf("project %s runs in the %s Runtime, which has Profiles of its own; --profile applies to host Sessions only", place.Project.Name, place.Project.Runtime)
+	profile, err := launchbus.SelectProfile(cfg, place.Project, a, chosen)
+	if err != nil {
+		return c.errorf("%v", err)
 	}
 
 	req := launchbus.Request{Home: home, Place: place, Task: task, Agent: a, Profile: profile}

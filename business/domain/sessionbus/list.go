@@ -24,6 +24,8 @@ type Session struct {
 	// says which container CWD is seen from.
 	Project   projectname.Name
 	SessionID string
+	// Ref names the Session's Event file to the storage.
+	Ref SessionRef
 	// CWD is the directory of the Session's first Event, which decides its
 	// Project. Later Events may come from other directories.
 	CWD    string
@@ -87,7 +89,7 @@ func (b *Bus) List(ctx context.Context) (sessions []Session, warnings []string, 
 
 		s := Session{
 			Agent: first.Agent, Profile: first.Profile, Runtime: first.Runtime, Project: ref.Project,
-			SessionID: first.SessionID, CWD: first.CWD,
+			SessionID: first.SessionID, Ref: ref, CWD: first.CWD,
 			Status: status.Unknown, Since: first.TS, Started: first.TS, Last: first.TS,
 		}
 		var proc *runtimebus.Process
