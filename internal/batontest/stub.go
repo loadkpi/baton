@@ -11,7 +11,7 @@ import (
 // defaultStubs are the external programs of the outside world. Every Env
 // installs a recording stub for each of them, so a test can never reach the
 // real program even though the real ones exist on the machine.
-var defaultStubs = []string{"guake", "docker", "notify-send", "claude", "codex"}
+var defaultStubs = []string{"guake", "docker", "notify-send", "systemctl", "claude", "codex"}
 
 // Call is one recorded invocation of a stub executable.
 type Call struct {
@@ -78,8 +78,11 @@ func (e *Env) Calls(name string) []Call {
 	var calls []Call
 	for len(fields) > 0 {
 		n, err := strconv.Atoi(string(fields[0]))
-		if err != nil || len(fields) < 2+n {
+		if err != nil {
 			e.t.Fatalf("corrupt call log for %s", name)
+		}
+		if len(fields) < 2+n {
+			break // a call that is still being recorded, by a process that runs while the test reads
 		}
 		call := Call{Dir: string(fields[1])}
 		for _, a := range fields[2 : 2+n] {

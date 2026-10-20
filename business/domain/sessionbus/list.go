@@ -30,10 +30,29 @@ type Session struct {
 	Status status.Status
 	// Since is when the Event that decided the status was reported.
 	Since time.Time
+	// TurnStart is, for a Session that waits for input, when the turn that
+	// ended in this wait began: the time of the UserPromptSubmit Event before
+	// the Event that decided the status. It is the zero time when no turn is
+	// known, for example for a Session that has only started.
+	TurnStart time.Time
 	// Started is when the Session's first Event was reported.
 	Started time.Time
 	// Last is when its newest Event, of any kind, was reported.
 	Last time.Time
+}
+
+// Key identifies a Session: the Agent's own session id is unique per Agent, and
+// a Session in a container is told apart by the Project whose directory holds
+// its Events.
+type Key struct {
+	Project   projectname.Name
+	Agent     agent.Agent
+	SessionID string
+}
+
+// Key returns the identity of the Session.
+func (s Session) Key() Key {
+	return Key{Project: s.Project, Agent: s.Agent, SessionID: s.SessionID}
 }
 
 // Active reports whether the Session can still be doing something: it has not
@@ -72,17 +91,28 @@ func (b *Bus) List(ctx context.Context) (sessions []Session, warnings []string, 
 			Status: status.Unknown, Since: first.TS, Started: first.TS, Last: first.TS,
 		}
 		var proc *runtimebus.Process
-		newest := true
+		newest, decided := true, false
 		err = b.storer.QueryEventsBackward(ctx, ref, func(e Event) bool {
 			if newest {
 				s.Last, newest = e.TS, false
 				proc = toBusProcess(e)
 			}
 			st, known := status.FromEvent(e.Agent, e.Name)
-			if known {
-				s.Status, s.Since = st, e.TS
+			if !decided {
+				if !known {
+					return true
+				}
+				s.Status, s.Since, decided = st, e.TS, true
+				// Only a wait that follows a turn has a turn to look for.
+				return st == status.WaitingInput && e.Name != status.SessionStart
 			}
-			return !known
+			// The turn began at the newest prompt before the wait; any other
+			// wait or the end of an earlier Session means there was none.
+			if e.Name == status.TurnStart {
+				s.TurnStart = e.TS
+				return false
+			}
+			return !known || st == status.Running || st == status.WaitingApproval
 		})
 		if err != nil {
 			return nil, nil, err

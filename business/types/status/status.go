@@ -28,6 +28,15 @@ const (
 // String returns the status as it is shown.
 func (s Status) String() string { return string(s) }
 
+// Names of Events that more than the status table needs.
+const (
+	// TurnStart is the Event that begins a turn: the user has sent a prompt.
+	// Both Agents report it under this name. A turn ends with a Stop.
+	TurnStart = "UserPromptSubmit"
+	// SessionStart is the Event that begins a Session, before any turn.
+	SessionStart = "SessionStart"
+)
+
 // claudeTable is the Claude Code column of the status table in DESIGN.md.
 var claudeTable = map[string]Status{
 	"UserPromptSubmit":   Running,

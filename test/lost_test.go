@@ -78,6 +78,14 @@ func deadPID(t *testing.T) int {
 // and its start time as /proc has it (clock ticks since boot).
 func livePID(t *testing.T) (pid int, start uint64) {
 	t.Helper()
+	cmd, start := sleeper(t)
+	return cmd.Process.Pid, start
+}
+
+// sleeper starts a process that runs until the test ends, or until the test
+// kills it, and returns it with its start time as /proc has it.
+func sleeper(t *testing.T) (*exec.Cmd, uint64) {
+	t.Helper()
 	cmd := exec.Command("sleep", "300")
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
@@ -92,11 +100,11 @@ func livePID(t *testing.T) (pid int, start uint64) {
 	}
 	stat := string(data)
 	fields := strings.Fields(stat[strings.LastIndexByte(stat, ')')+1:])
-	start, err = strconv.ParseUint(fields[19], 10, 64)
+	start, err := strconv.ParseUint(fields[19], 10, 64)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return cmd.Process.Pid, start
+	return cmd, start
 }
 
 func TestLost_AHostSessionWhoseAgentProcessIsGoneShowsAsLost(t *testing.T) {
