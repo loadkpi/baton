@@ -357,7 +357,7 @@ func TestWatch_WithoutTheWatcherListingAndHooksWork(t *testing.T) {
 	runHook(t, env, "claude-personal", "SessionStart", "s1", repo)
 	rows := lsRows(t, env)
 
-	if len(rows) != 1 || rows[0][5] != "waiting_input" {
+	if len(rows) != 1 || rows[0][6] != "waiting_input" {
 		t.Errorf("rows = %v, want the Session the hook recorded", rows)
 	}
 }

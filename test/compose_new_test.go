@@ -361,7 +361,7 @@ func TestComposeLs_ASessionStartedByHandShowsUpInItsProjectWorkingCopyAndTask(t 
 	running := lsRows(t, env)
 
 	want := func(status string) [][]string {
-		return [][]string{{"app", "YYYY-MM-DD-1", "claude", "app.claude", "compose", status}}
+		return [][]string{{"app", "YYYY-MM-DD-1", "claude", "s1", "app.claude", "compose", status}}
 	}
 	if !reflect.DeepEqual(waiting, want("waiting_input")) || !reflect.DeepEqual(running, want("running")) {
 		t.Errorf("rows = %v and %v, want %v and %v", waiting, running, want("waiting_input"), want("running"))
@@ -381,7 +381,7 @@ func TestComposeLs_ASessionOfAnotherAgentIsShownToo(t *testing.T) {
 		t.Fatalf("hook: exit code = %d, stderr=%q", res.ExitCode, res.Stderr)
 	}
 
-	want := [][]string{{"app", "YYYY-MM-DD-1", "codex", "app.codex", "compose", "waiting_input"}}
+	want := [][]string{{"app", "YYYY-MM-DD-1", "codex", "thr_9", "app.codex", "compose", "waiting_input"}}
 	if got := lsRows(t, env); !reflect.DeepEqual(got, want) {
 		t.Errorf("rows = %v, want %v", got, want)
 	}

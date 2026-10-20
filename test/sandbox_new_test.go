@@ -481,7 +481,7 @@ func TestSandboxLs_ASessionInTheContainerShowsUpWithItsRuntimeAndLiveStatus(t *t
 	running := lsRows(t, env)
 
 	want := func(status string) [][]string {
-		return [][]string{{"app", "YYYY-MM-DD-1", "claude", "app.claude", "sandbox", status}}
+		return [][]string{{"app", "YYYY-MM-DD-1", "claude", "s1", "app.claude", "sandbox", status}}
 	}
 	if !reflect.DeepEqual(waiting, want("waiting_input")) {
 		t.Errorf("rows = %v, want %v", waiting, want("waiting_input"))
@@ -524,7 +524,7 @@ func TestSandboxLs_PathsAreMappedThroughTheMountsNotAssumedEqual(t *testing.T) {
 			sandboxHook(t, env, root, "Stop", "s1", cwd)
 
 			rows := lsRows(t, env)
-			if len(rows) != 1 || rows[0][0] != tc.project || rows[0][4] != "sandbox" {
+			if len(rows) != 1 || rows[0][0] != tc.project || rows[0][5] != "sandbox" {
 				t.Errorf("rows = %v, want one sandbox Session of %s", rows, tc.project)
 			}
 		})
@@ -539,7 +539,7 @@ func TestSandboxLs_ASessionOfAContainerBatonDidNotStartHasNoProject(t *testing.T
 	sandboxHook(t, env, root, "Stop", "s1", "/workspace")
 
 	rows := lsRows(t, env)
-	if len(rows) != 1 || rows[0][0] != "-" || rows[0][4] != "sandbox" {
+	if len(rows) != 1 || rows[0][0] != "-" || rows[0][5] != "sandbox" {
 		t.Errorf("rows = %v, want one sandbox Session without a Project", rows)
 	}
 }

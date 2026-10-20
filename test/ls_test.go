@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -70,10 +71,40 @@ func TestLs_ShowsAHostClaudeSessionWithItsProjectProfileRuntimeAndStatus(t *test
 	if res.ExitCode != 0 {
 		t.Fatalf("exit code = %d, stderr=%q", res.ExitCode, res.Stderr)
 	}
-	want := "PROJECT  TASK          AGENT   PROFILE          RUNTIME  STATUS\n" +
-		"my-app   YYYY-MM-DD-1  claude  claude-personal  host     waiting_input\n"
+	want := "PROJECT  TASK          AGENT   SESSION  PROFILE          RUNTIME  STATUS\n" +
+		"my-app   YYYY-MM-DD-1  claude  abc123   claude-personal  host     waiting_input\n"
 	if got := stable(res.Stdout); got != want {
 		t.Errorf("stdout = %q, want %q", got, want)
+	}
+}
+
+func TestLs_TheSessionColumnShowsTheFirstEightCharactersOfALongSessionId(t *testing.T) {
+	env := newEnv(t)
+	repo := newRepo(t, env, "my-app")
+	runHook(t, env, "claude-personal", "SessionStart", "0b5d2c1e-7f3a-4c88-9d21-a1b2c3d4e5f6", repo)
+
+	rows := lsRows(t, env)
+
+	if len(rows) != 1 || rows[0][3] != "0b5d2c1e" {
+		t.Errorf("rows = %v, want the Session column 0b5d2c1e", rows)
+	}
+}
+
+func TestLs_SessionIdsThatShareTheirFirstEightCharactersLengthenTheWholeColumnUntilUnique(t *testing.T) {
+	env := newEnv(t)
+	repo := newRepo(t, env, "my-app")
+	runHook(t, env, "claude-personal", "Stop", "abcdefgh-1111", repo)
+	runHook(t, env, "claude-personal", "Stop", "abcdefgh-2222", repo)
+	runHook(t, env, "claude-personal", "Stop", "zzzzzzzzzzzzzzzz", repo)
+
+	var got []string
+	for _, row := range lsRows(t, env) {
+		got = append(got, row[3])
+	}
+
+	sort.Strings(got)
+	if want := []string{"abcdefgh-1", "abcdefgh-2", "zzzzzzzzzz"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("Session column = %v, want %v", got, want)
 	}
 }
 
@@ -111,7 +142,7 @@ func TestLs_StatusFollowsTheLastEventPerTheStatusTable(t *testing.T) {
 
 			rows := lsRows(t, env)
 
-			if len(rows) != 1 || rows[0][5] != tt.status {
+			if len(rows) != 1 || rows[0][6] != tt.status {
 				t.Errorf("rows = %v, want one Session with status %s", rows, tt.status)
 			}
 		})
@@ -134,7 +165,7 @@ func TestLs_AWholeTurnWalksThroughTheStatuses(t *testing.T) {
 	}
 	for _, step := range steps {
 		runHook(t, env, "claude-personal", step.event, "abc123", repo)
-		if rows := lsRows(t, env); len(rows) != 1 || rows[0][5] != step.status {
+		if rows := lsRows(t, env); len(rows) != 1 || rows[0][6] != step.status {
 			t.Fatalf("after %s: rows = %v, want status %s", step.event, rows, step.status)
 		}
 	}
@@ -149,7 +180,7 @@ func TestLs_AnEventTheStatusTableDoesNotKnowKeepsTheEarlierStatus(t *testing.T) 
 
 	rows := lsRows(t, env)
 
-	if len(rows) != 1 || rows[0][5] != "running" {
+	if len(rows) != 1 || rows[0][6] != "running" {
 		t.Errorf("rows = %v, want running", rows)
 	}
 }
@@ -162,7 +193,7 @@ func TestLs_ASessionWithOnlyUnknownEventsIsListedAsUnknown(t *testing.T) {
 
 	rows := lsRows(t, env)
 
-	if len(rows) != 1 || rows[0][5] != "unknown" {
+	if len(rows) != 1 || rows[0][6] != "unknown" {
 		t.Errorf("rows = %v, want unknown", rows)
 	}
 }
@@ -178,9 +209,9 @@ func TestLs_ListsEverySessionAcrossProjectsAndProfilesMostRecentFirst(t *testing
 	rows := lsRows(t, env)
 
 	want := [][]string{
-		{"app", "YYYY-MM-DD-1", "claude", "claude-personal", "host", "waiting_approval"},
-		{"api", "YYYY-MM-DD-1", "claude", "claude-work", "host", "running"},
-		{"app", "YYYY-MM-DD-1", "claude", "claude-personal", "host", "waiting_input"},
+		{"app", "YYYY-MM-DD-1", "claude", "s3", "claude-personal", "host", "waiting_approval"},
+		{"api", "YYYY-MM-DD-1", "claude", "s2", "claude-work", "host", "running"},
+		{"app", "YYYY-MM-DD-1", "claude", "s1", "claude-personal", "host", "waiting_input"},
 	}
 	if !reflect.DeepEqual(rows, want) {
 		t.Errorf("rows = %v, want %v", rows, want)
@@ -264,7 +295,7 @@ func TestLs_RegistersAnUnknownProjectWithTheHostRuntimeUnlessItHasASandbox(t *te
 	}
 	// The Runtime of the Session is the one it reported, not the default of its Project.
 	for _, row := range lsRows(t, env) {
-		if row[4] != "host" {
+		if row[5] != "host" {
 			t.Errorf("row = %v, want Runtime host as reported by the hook", row)
 		}
 	}
@@ -288,8 +319,8 @@ func TestLs_AProjectNameThatIsTakenGetsASuffixAndEachRepositoryKeepsItsName(t *t
 	again := lsRows(t, env)
 
 	want := [][]string{
-		{"app-2", "YYYY-MM-DD-1", "claude", "claude-personal", "host", "running"},
-		{"app", "YYYY-MM-DD-1", "claude", "claude-personal", "host", "waiting_input"},
+		{"app-2", "YYYY-MM-DD-1", "claude", "s2", "claude-personal", "host", "running"},
+		{"app", "YYYY-MM-DD-1", "claude", "s1", "claude-personal", "host", "waiting_input"},
 	}
 	if !reflect.DeepEqual(rows, want) || !reflect.DeepEqual(again, want) {
 		t.Errorf("rows = %v, again = %v, want %v", rows, again, want)
@@ -359,7 +390,7 @@ func TestLs_ReadsTheLastEventOfAFileWhoseLinesAreLargerThanAReadChunk(t *testing
 
 	rows := lsRows(t, env)
 
-	if len(rows) != 1 || rows[0][5] != "waiting_approval" {
+	if len(rows) != 1 || rows[0][6] != "waiting_approval" {
 		t.Errorf("rows = %v, want waiting_approval", rows)
 	}
 }
@@ -381,7 +412,7 @@ func TestLs_IgnoresALineThatIsStillBeingWrittenAndOneThatIsNotAnEvent(t *testing
 
 	rows := lsRows(t, env)
 
-	if len(rows) != 1 || rows[0][5] != "running" {
+	if len(rows) != 1 || rows[0][6] != "running" {
 		t.Errorf("rows = %v, want running", rows)
 	}
 }
@@ -430,7 +461,7 @@ func TestLs_ASessionStartedByHandShowsUpAfterSync(t *testing.T) {
 
 	// The stub has exited by now, and the Event names its process (the hook's
 	// ancestor called claude): the Session is lost, as a crashed Claude's would be.
-	want := [][]string{{"my-app", "YYYY-MM-DD-1", "claude", "claude-personal", "host", "lost"}}
+	want := [][]string{{"my-app", "YYYY-MM-DD-1", "claude", "abc123", "claude-personal", "host", "lost"}}
 	if !reflect.DeepEqual(rows, want) {
 		t.Errorf("rows = %v, want %v", rows, want)
 	}

@@ -400,8 +400,8 @@ func TestNew_TheSessionTheTabStartsShowsUpInLsUnderTheProject(t *testing.T) {
 	runHook(t, env, "claude-personal", "SessionStart", "abc123", repo)
 	res := env.Run("ls")
 
-	want := "PROJECT  TASK          AGENT   PROFILE          RUNTIME  STATUS\n" +
-		"my-app   YYYY-MM-DD-1  claude  claude-personal  host     waiting_input\n"
+	want := "PROJECT  TASK          AGENT   SESSION  PROFILE          RUNTIME  STATUS\n" +
+		"my-app   YYYY-MM-DD-1  claude  abc123   claude-personal  host     waiting_input\n"
 	if got := stable(res.Stdout); res.ExitCode != 0 || got != want {
 		t.Errorf("exit code = %d, stdout=%q, want %q", res.ExitCode, got, want)
 	}

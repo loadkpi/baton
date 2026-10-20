@@ -66,7 +66,7 @@ A single Go binary, `baton`, with no stateful Daemon. All state lives in files u
 29. As a user, I want to choose the Profile for a host Session, so that I can work under `claude-personal` or `claude-work`.
 30. As a user, I want Baton to remove `ANTHROPIC_API_KEY` and the OpenAI key from the environment when it launches an Agent on the host, so that I am never switched to API billing by accident.
 31. As a user, I want sandbox Sessions to run through `ai-sandbox` with only this Project's Baton directory mounted read-write and the Baton binary mounted read-only, so that a sandbox never sees other Projects.
-32. As a user, I want `baton ls` to show every Session across Projects and Profiles with its Project, Task, Agent, Profile, Runtime and status, so that I see everything in one place.
+32. As a user, I want `baton ls` to show every Session across Projects and Profiles with its Project, Task, Agent, the start of its session id, Profile, Runtime and status, so that I see everything in one place.
 33. As a user, I want Session status to be one of `running`, `waiting_approval`, `waiting_input`, `ended`, `lost`, so that the list is simple and means the same for both Agents.
 34. As a user, I want a Session to show `waiting_input` after the Agent finishes a turn, so that I know it is my turn even though Codex has no "waiting for input" hook.
 35. As a user, I want a Session whose process or container died without `SessionEnd` to show `lost`, so that crashed Sessions do not look alive.
@@ -107,6 +107,10 @@ A single Go binary, `baton`, with no stateful Daemon. All state lives in files u
 61. As a user, I want `baton new` to open a Guake tab that starts the service if needed and runs the Agent in it with `docker compose exec` in the Project's directory inside the container, so that Sessions in the dev container are tied to Tasks like any other.
 62. As a user, I want paths inside the container mapped back to host paths from the container's mounts, so that Sessions in the dev container land in the right Project, Working copy and Task, and count for the one-active-Session rule together with host Sessions in the same checkout.
 63. As a user, I want a Session whose Agent process died inside a container that is still running to show `lost`, so that a long-lived dev container does not hide crashed Sessions.
+
+### Recovery
+
+64. As a user, I want to end a Session by hand with `baton session end <session>` when Baton cannot tell that it is dead, so that a crashed Session never blocks its Working copy or a Handoff forever.
 
 ## Implementation Decisions
 
@@ -222,7 +226,7 @@ A single Go binary, `baton`, with no stateful Daemon. All state lives in files u
 
 ## Further Notes
 
-- Build order follows `DESIGN.md`'s v1 plan, each stage usable on its own: (1) `baton sync`, (2) Sessions and statuses, (3) watcher and notifications, (4) Handoff, (5) the `compose` Runtime (tickets 16–18), built on the Runtime interface from tickets 08–11.
+- Build order follows `DESIGN.md`'s v1 plan, each stage usable on its own: (1) `baton sync`, (2) Sessions and statuses, (3) watcher and notifications, (4) Handoff, (5) the `compose` Runtime (tickets 16–18, Codex in it: 19), built on the Runtime interface from tickets 08–11; (6) ending a stuck Session by hand (20).
 - Unverified facts for the `compose` Runtime: how to write into a Profile in a named volume (`docker cp` into a running container, `docker compose exec` with a tar stream, or a short-lived `docker run` with the volume; ownership and UID inside the container); whether an Agent inside a container sees the `ANTHROPIC_API_KEY`/OpenAI key of the container's environment and how `docker compose exec` can unset them; whether the hook's `agent_pid` inside a container is the Agent or a shell.
 - Unverified facts to check at the start of the relevant stage: whether interactive `codex` accepts an initial prompt as a positional argument (Handoff); what the `NEW_TAB` argument of `guake -n` means (Terminal); whether the hook's parent process is the Agent or a shell (Sessions); whether Codex payloads use Claude's field names (Sessions); whether `PostToolUse` payloads carry exit codes (Handoff); whether Claude rewrites `.claude.json` while running (Sync); whether `run.sh` regenerates Codex `hooks.json` or skills (Sync).
 - Not decided in the review, left to implementation: exact command names for naming a Task and setting its status; which tags sandbox Profiles accept by default; how items carry tags in the source and the MCP manifest's file name and format; the command that installs the `systemd --user` unit. Each is chosen in its ticket and recorded in `DESIGN.md`.

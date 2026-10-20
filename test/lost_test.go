@@ -181,7 +181,7 @@ func TestLost_AHostSessionWhoseAgentProcessIsGoneShowsAsLost(t *testing.T) {
 
 	rows := lsRows(t, env)
 
-	if len(rows) != 1 || rows[0][5] != "lost" {
+	if len(rows) != 1 || rows[0][6] != "lost" {
 		t.Errorf("rows = %v, want one Session with status lost", rows)
 	}
 }
@@ -194,7 +194,7 @@ func TestLost_AHostSessionWhoseAgentProcessRunsStaysWithTheStatusOfItsEvents(t *
 
 	rows := lsRows(t, env)
 
-	if len(rows) != 1 || rows[0][5] != "running" {
+	if len(rows) != 1 || rows[0][6] != "running" {
 		t.Errorf("rows = %v, want one Session with status running", rows)
 	}
 }
@@ -207,7 +207,7 @@ func TestLost_AHostSessionWhoseAgentIsAZombieShowsAsLost(t *testing.T) {
 
 	rows := lsRows(t, env)
 
-	if len(rows) != 1 || rows[0][5] != "lost" {
+	if len(rows) != 1 || rows[0][6] != "lost" {
 		t.Errorf("rows = %v, want one Session with status lost", rows)
 	}
 }
@@ -220,7 +220,7 @@ func TestLost_AReusedPIDIsNotTheAgent(t *testing.T) {
 
 	rows := lsRows(t, env)
 
-	if len(rows) != 1 || rows[0][5] != "lost" {
+	if len(rows) != 1 || rows[0][6] != "lost" {
 		t.Errorf("rows = %v, want one Session with status lost", rows)
 	}
 }
@@ -234,7 +234,7 @@ func TestLost_ASessionThatEndedIsEndedWhateverBecameOfItsProcess(t *testing.T) {
 
 	rows := lsRows(t, env)
 
-	if len(rows) != 1 || rows[0][5] != "ended" {
+	if len(rows) != 1 || rows[0][6] != "ended" {
 		t.Errorf("rows = %v, want one Session with status ended", rows)
 	}
 }
@@ -247,7 +247,7 @@ func TestLost_AnEventFromAnotherMachineIsNotJudgedByThisMachinesProcesses(t *tes
 
 	rows := lsRows(t, env)
 
-	if len(rows) != 1 || rows[0][5] != "waiting_input" {
+	if len(rows) != 1 || rows[0][6] != "waiting_input" {
 		t.Errorf("rows = %v, want one Session with status waiting_input", rows)
 	}
 }
@@ -259,7 +259,7 @@ func TestLost_APIDThatIsOnlyTheHooksParentSaysNothingAboutTheAgent(t *testing.T)
 
 	rows := lsRows(t, env)
 
-	if len(rows) != 1 || rows[0][5] != "waiting_input" {
+	if len(rows) != 1 || rows[0][6] != "waiting_input" {
 		t.Errorf("rows = %v, want one Session with status waiting_input", rows)
 	}
 }
@@ -271,7 +271,7 @@ func TestLost_AnEventWithoutAProcessIsNotJudged(t *testing.T) {
 
 	rows := lsRows(t, env)
 
-	if len(rows) != 1 || rows[0][5] != "waiting_input" {
+	if len(rows) != 1 || rows[0][6] != "waiting_input" {
 		t.Errorf("rows = %v, want one Session with status waiting_input", rows)
 	}
 }
@@ -286,7 +286,7 @@ func TestLost_TheNewestEventDecidesWhichProcessIsChecked(t *testing.T) {
 
 	rows := lsRows(t, env)
 
-	if len(rows) != 1 || rows[0][5] != "running" {
+	if len(rows) != 1 || rows[0][6] != "running" {
 		t.Errorf("rows = %v, want one Session with status running", rows)
 	}
 }
@@ -432,7 +432,7 @@ func sandboxEvent(t *testing.T, env *batontest.Env, sessionID, ts, event string,
 func statuses(rows [][]string) []string {
 	out := make([]string, len(rows))
 	for i, r := range rows {
-		out[i] = r[5]
+		out[i] = r[6]
 	}
 	return out
 }

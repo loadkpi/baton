@@ -53,7 +53,7 @@ func TestTask_ASessionInAWorkingCopyWithoutATaskGetsAnUnnamedTaskNamedAfterTheDa
 
 	rows := lsRowsRaw(t, env)
 
-	want := [][]string{{"my-app", "2031-03-04-1", "claude", "claude-personal", "host", "waiting_input"}}
+	want := [][]string{{"my-app", "2031-03-04-1", "claude", "s1", "claude-personal", "host", "waiting_input"}}
 	if !reflect.DeepEqual(rows, want) {
 		t.Errorf("rows = %v, want %v", rows, want)
 	}
@@ -293,7 +293,7 @@ func TestTask_ASessionOutsideGitHasNoTask(t *testing.T) {
 
 	rows := lsRowsRaw(t, env)
 
-	if want := [][]string{{"-", "-", "claude", "claude-personal", "host", "waiting_input"}}; !reflect.DeepEqual(rows, want) {
+	if want := [][]string{{"-", "-", "claude", "s1", "claude-personal", "host", "waiting_input"}}; !reflect.DeepEqual(rows, want) {
 		t.Errorf("rows = %v, want %v", rows, want)
 	}
 }
@@ -319,6 +319,23 @@ func TestTask_NewRefusesWhileTheWorkingCopyHasAnActiveSessionAndNamesIt(t *testi
 	// The current Task did not change, nor was a Task made.
 	if env.Exists(".baton/projects/my-app/current.jsonl") || env.Exists(".baton/projects/my-app/tasks") {
 		t.Errorf("the refused command left files: %v", env.ListDir(".baton/projects/my-app"))
+	}
+}
+
+func TestTask_TheRefusalNamesTheSessionByTheIdOfWhichLsShowsTheFirstEightCharacters(t *testing.T) {
+	env := newEnv(t)
+	env.WriteConfig(newConfig(env, ""))
+	repo := newRepo(t, env, "my-app")
+	writeEvent(t, env, "0b5d2c1e-7f3a-4c88-9d21-a1b2c3d4e5f6", "2031-03-04T10:00:00Z", "SessionStart", repo)
+
+	res := env.Run("new", repo, "other", "--agent", "claude")
+	rows := lsRowsRaw(t, env)
+
+	if res.ExitCode != 1 || !strings.Contains(res.Stderr, ", session 0b5d2c1e-7f3a-4c88-9d21-a1b2c3d4e5f6, ") {
+		t.Errorf("exit code = %d, stderr=%q, want the full session id", res.ExitCode, res.Stderr)
+	}
+	if len(rows) != 1 || rows[0][3] != "0b5d2c1e" {
+		t.Errorf("rows = %v, want the Session column 0b5d2c1e, the start of the id in the refusal", rows)
 	}
 }
 

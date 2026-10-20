@@ -71,7 +71,7 @@ func TestCodexNew_StatusesFollowTheCodexColumnOfTheStatusTable(t *testing.T) {
 	}
 	for _, step := range steps {
 		codexHook(t, env, root, step.event, "thr_123", "/workspace")
-		want := [][]string{{"app", "YYYY-MM-DD-1", "codex", "app.codex", "sandbox", step.want}}
+		want := [][]string{{"app", "YYYY-MM-DD-1", "codex", "thr_123", "app.codex", "sandbox", step.want}}
 		if got := lsRows(t, env); !reflect.DeepEqual(got, want) {
 			t.Fatalf("after %s: rows = %v, want %v", step.event, got, want)
 		}
@@ -194,7 +194,7 @@ func TestCodexLs_ASessionBatonStartedThatReportsNothingIsFlaggedWithAHintToTrust
 		t.Fatalf("ls: exit code = %d, stderr=%q", res.ExitCode, res.Stderr)
 	}
 	rows := lsRows(t, env)
-	if want := []string{"app", "YYYY-MM-DD-1", "codex", "app.codex", "sandbox", "no_events"}; !reflect.DeepEqual(rows[0], want) {
+	if want := []string{"app", "YYYY-MM-DD-1", "codex", "-", "app.codex", "sandbox", "no_events"}; !reflect.DeepEqual(rows[0], want) {
 		t.Errorf("first row = %v, want %v", rows[0], want)
 	}
 	hints := hintLines(res.Stdout)
@@ -215,7 +215,7 @@ func TestCodexLs_TheHintGoesAwayWithTheFirstEvent(t *testing.T) {
 	if hints := hintLines(res.Stdout); len(hints) != 0 {
 		t.Errorf("hints = %q, want none once an Event arrived", hints)
 	}
-	if rows := lsRows(t, env); !reflect.DeepEqual(rows, [][]string{{"app", "YYYY-MM-DD-1", "codex", "app.codex", "sandbox", "waiting_input"}}) {
+	if rows := lsRows(t, env); !reflect.DeepEqual(rows, [][]string{{"app", "YYYY-MM-DD-1", "codex", "thr_123", "app.codex", "sandbox", "waiting_input"}}) {
 		t.Errorf("rows = %v, want the Session with its status", rows)
 	}
 }
