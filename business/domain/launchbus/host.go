@@ -4,6 +4,7 @@ import (
 	"path/filepath"
 
 	"github.com/loadkpi/baton/business/domain/configbus"
+	"github.com/loadkpi/baton/business/domain/taskbus"
 )
 
 // This file is the one place that knows how an Agent is started on the host.
@@ -19,7 +20,7 @@ var apiKeyVars = []string{"ANTHROPIC_API_KEY", "OPENAI_API_KEY"}
 // The tab's shell is started by Guake's own server process, which does not
 // inherit the environment of baton, so the command clears the variables itself
 // with env(1) and sets the Profile's directory the same way.
-func hostTab(r Request) Tab {
+func hostTab(r Request, task taskbus.Task) Tab {
 	command := []string{"env"}
 	for _, name := range apiKeyVars {
 		command = append(command, "-u", name)
@@ -33,13 +34,9 @@ func hostTab(r Request) Tab {
 	}
 	command = append(command, r.Agent.Binary())
 
-	title := r.Project.Name.String()
-	if r.Task.String() != "" {
-		title += "/" + r.Task.String()
-	}
-	title += ":" + r.Agent.String()
+	title := r.Place.Project.Name.String() + "/" + task.Label() + ":" + r.Agent.String()
 
-	return Tab{Dir: r.Project.Path, Title: title, Command: command}
+	return Tab{Dir: r.Place.WorkingCopy, Title: title, Command: command}
 }
 
 // isDefaultDir is true for the Profile at ~/.claude, which Claude Code uses

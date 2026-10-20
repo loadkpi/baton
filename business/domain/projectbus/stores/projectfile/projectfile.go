@@ -51,9 +51,11 @@ func toBusProject(name string, fp fileProject) (projectbus.Project, error) {
 	return projectbus.Project{Name: n, Path: fp.Path, Runtime: r}, nil
 }
 
-// QueryGitRoot returns the root of the work tree containing dir.
-func (s *Store) QueryGitRoot(ctx context.Context, dir string) (string, bool, error) {
-	return git.TopLevel(ctx, dir)
+// QueryRepo returns the root of the work tree containing dir and the root of
+// the main checkout of its repository.
+func (s *Store) QueryRepo(ctx context.Context, dir string) (workingCopy, main string, ok bool, err error) {
+	repo, ok, err := git.Locate(ctx, dir)
+	return repo.Root, repo.Main, ok, err
 }
 
 // QuerySandboxScript reports whether root has .ai-sandbox/run.sh.

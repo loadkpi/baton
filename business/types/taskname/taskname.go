@@ -4,13 +4,17 @@ package taskname
 import (
 	"fmt"
 	"regexp"
+
+	"github.com/loadkpi/baton/business/types/taskid"
 )
 
 // pattern keeps a name safe to use in a Terminal's tab title, where "/" and
 // ":" separate the parts (<project>/<task>:<agent>), and as a file name.
 var pattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]*$`)
 
-// Name identifies a Task within its Project, for example "login-fix".
+// Name is the name of a Task within its Project, for example "login-fix". A
+// Task may have none (it is unnamed), and the name may change; its identity is
+// its taskid.ID.
 type Name struct {
 	value string
 }
@@ -19,6 +23,9 @@ type Name struct {
 func Parse(s string) (Name, error) {
 	if !pattern.MatchString(s) {
 		return Name{}, fmt.Errorf("invalid task name %q: use lowercase letters, digits, '.', '_' and '-', starting with a letter or digit", s)
+	}
+	if taskid.Looks(s) {
+		return Name{}, fmt.Errorf("invalid task name %q: it looks like a generated task id (<date>-<n>)", s)
 	}
 	return Name{value: s}, nil
 }

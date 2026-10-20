@@ -18,7 +18,7 @@ import (
 	"github.com/loadkpi/baton/business/domain/projectbus/stores/projectfile"
 	"github.com/loadkpi/baton/business/types/agent"
 	"github.com/loadkpi/baton/business/types/profilename"
-	"github.com/loadkpi/baton/business/types/taskname"
+	"github.com/loadkpi/baton/business/types/taskref"
 )
 
 const newUsage = "usage: baton new <project> [task] --agent <claude> [--profile <name>]"
@@ -42,7 +42,7 @@ func runNew(ctx context.Context, c console, home string, args []string) int {
 	if err != nil {
 		return c.usagef("new: --agent: %v", err)
 	}
-	task, err := toBusTaskName(parsed.task)
+	task, err := toBusTaskRef(parsed.task)
 	if err != nil {
 		return c.usagef("new: %v", err)
 	}
@@ -61,13 +61,14 @@ func runNew(ctx context.Context, c console, home string, args []string) int {
 		return c.errorf("%v", err)
 	}
 
-	project, err := findProject(ctx, home, parsed.project)
+	place, err := findPlace(ctx, home, parsed.project)
 	if err != nil {
 		return c.errorf("%v", err)
 	}
 
-	req := launchbus.Request{Home: home, Project: project, Task: task, Agent: a, Profile: profile}
-	if err := launchbus.New(launchguake.New()).Start(ctx, req); err != nil {
+	req := launchbus.Request{Home: home, Place: place, Task: task, Agent: a, Profile: profile}
+	work := newWorkBus(filepath.Join(home, ".baton"))
+	if err := launchbus.New(launchguake.New(), work).Start(ctx, req); err != nil {
 		return c.errorf("%v", err)
 	}
 	return exitOK
@@ -110,12 +111,12 @@ func parseNewArgs(args []string) (newArgs, error) {
 	return out, nil
 }
 
-// toBusTaskName parses the optional Task name; no name gives the zero value.
-func toBusTaskName(s string) (taskname.Name, error) {
+// toBusTaskRef parses the optional Task name or id; none gives the zero value.
+func toBusTaskRef(s string) (taskref.Ref, error) {
 	if s == "" {
-		return taskname.Name{}, nil
+		return taskref.Ref{}, nil
 	}
-	return taskname.Parse(s)
+	return taskref.Parse(s)
 }
 
 // toBusProfileChoice parses the optional --profile; no flag gives the zero
@@ -127,27 +128,30 @@ func toBusProfileChoice(s string) (profilename.Name, error) {
 	return profilename.Parse(s)
 }
 
-// findProject returns the Project a name or a directory stands for. A
-// directory inside a git repository registers the repository as a Project when
-// Baton does not know it yet; a bare name must be a Project Baton knows.
-func findProject(ctx context.Context, home, ref string) (projectbus.Project, error) {
+// findPlace returns the Working copy a name or a directory stands for. A bare
+// name is a Project Baton knows, and means its main checkout. A directory
+// inside a git repository means the Working copy that holds it, a git worktree
+// included, and registers the repository as a Project when Baton does not know
+// it yet.
+func findPlace(ctx context.Context, home, ref string) (projectbus.Place, error) {
 	projects := projectbus.New(projectfile.New(filepath.Join(home, ".baton")))
 	if !isPath(ref) {
-		return projects.Named(ctx, ref)
+		p, err := projects.Named(ctx, ref)
+		return projectbus.Place{Project: p, WorkingCopy: p.Path}, err
 	}
 
 	dir, err := filepath.Abs(ref)
 	if err != nil {
-		return projectbus.Project{}, err
+		return projectbus.Place{}, err
 	}
-	p, ok, err := projects.Resolve(ctx, dir)
+	place, ok, err := projects.Resolve(ctx, dir)
 	if err != nil {
-		return projectbus.Project{}, err
+		return projectbus.Place{}, err
 	}
 	if !ok {
-		return projectbus.Project{}, fmt.Errorf("%s is not inside a git repository", dir)
+		return projectbus.Place{}, fmt.Errorf("%s is not inside a git repository", dir)
 	}
-	return p, nil
+	return place, nil
 }
 
 // isPath tells a directory from a Project name: a name has no separator.

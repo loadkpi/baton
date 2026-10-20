@@ -129,25 +129,50 @@ func cleanEnv() []string {
 	return env
 }
 
-// TopLevel returns the root of the work tree that contains dir. ok is false
-// when dir is not inside a work tree, or does not exist.
-func TopLevel(ctx context.Context, dir string) (root string, ok bool, err error) {
+// Repo is where a directory sits in a git repository.
+type Repo struct {
+	// Root is the root of the work tree that contains the directory: the main
+	// checkout, or a linked worktree.
+	Root string
+	// Main is the root of the main checkout of the repository. It equals Root
+	// for the main checkout itself, and for a repository whose common git
+	// directory is not <root>/.git (a submodule, say), where no main checkout
+	// can be derived.
+	Main string
+}
+
+// Locate finds the work tree that contains dir and the main checkout of its
+// repository. A linked worktree (`git worktree add`) has its own Root but
+// shares the common git directory, and with it Main, with the checkout it was
+// made from. ok is false when dir is not inside a work tree (outside git, in a
+// bare repository, or in a .git directory), or does not exist.
+func Locate(ctx context.Context, dir string) (repo Repo, ok bool, err error) {
 	if info, statErr := os.Stat(dir); statErr != nil || !info.IsDir() {
-		return "", false, nil
+		return Repo{}, false, nil
 	}
-	cmd := exec.CommandContext(ctx, "git", "-C", dir, "rev-parse", "--show-toplevel")
+	cmd := exec.CommandContext(ctx, "git", "-C", dir, "rev-parse", "--path-format=absolute", "--show-toplevel", "--git-common-dir")
 	cmd.Env = cleanEnv()
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	if err := cmd.Run(); err != nil {
 		switch {
 		case errors.Is(err, exec.ErrNotFound):
-			return "", false, fmt.Errorf("git is needed to find the Project of %s: %w", dir, err)
-		case strings.Contains(stderr.String(), "not a git repository"):
-			return "", false, nil
+			return Repo{}, false, fmt.Errorf("git is needed to find the Project of %s: %w", dir, err)
+		case strings.Contains(stderr.String(), "not a git repository"),
+			strings.Contains(stderr.String(), "must be run in a work tree"):
+			return Repo{}, false, nil
 		default:
-			return "", false, fmt.Errorf("git rev-parse in %s: %w: %s", dir, err, strings.TrimSpace(stderr.String()))
+			return Repo{}, false, fmt.Errorf("git rev-parse in %s: %w: %s", dir, err, strings.TrimSpace(stderr.String()))
 		}
 	}
-	return strings.TrimRight(stdout.String(), "\n"), true, nil
+
+	lines := strings.Split(strings.TrimRight(stdout.String(), "\n"), "\n")
+	if len(lines) != 2 {
+		return Repo{}, false, fmt.Errorf("git rev-parse in %s: unexpected output %q", dir, stdout.String())
+	}
+	repo = Repo{Root: lines[0], Main: lines[0]}
+	if common := lines[1]; filepath.Base(common) == ".git" {
+		repo.Main = filepath.Dir(common)
+	}
+	return repo, true, nil
 }

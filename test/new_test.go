@@ -25,7 +25,10 @@ func TestNew_OpensAGuakeTabInTheProjectsDirectoryWithItsTitleAndTheAgentCommand(
 	}
 	got := guakeArgs(env)
 	want := [][]string{
-		{"-e", "cd " + repo + " && env -u ANTHROPIC_API_KEY -u OPENAI_API_KEY CLAUDE_CONFIG_DIR=" + env.Path(".claude-personal") + " claude", "-r", "my-app:claude"},
+		{"-e", "cd " + repo + " && env -u ANTHROPIC_API_KEY -u OPENAI_API_KEY CLAUDE_CONFIG_DIR=" + env.Path(".claude-personal") + " claude", "-r", "my-app/YYYY-MM-DD-1:claude"},
+	}
+	for _, call := range got {
+		call[3] = stable(call[3]) // the unnamed Task is named after today
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("guake calls = %q, want %q", got, want)
@@ -63,8 +66,8 @@ func TestNew_RegistersTheProjectAndLaterRunsCanUseItsName(t *testing.T) {
 		t.Errorf("project.toml = %q, want %q", got, want)
 	}
 	calls := guakeArgs(env)
-	if len(calls) != 2 || !reflect.DeepEqual(calls[0], calls[1]) {
-		t.Errorf("guake calls = %q, want the same tab opened twice", calls)
+	if len(calls) != 2 || calls[0][1] != calls[1][1] {
+		t.Errorf("guake calls = %q, want the same line typed twice", calls)
 	}
 }
 
@@ -326,9 +329,9 @@ func TestNew_ARefusedGuakeIsReported(t *testing.T) {
 
 	res := env.Run("new", repo, "--agent", "claude")
 
-	want := "baton: open a tab for my-app:claude: guake: exit status 1: no dbus\n"
-	if res.ExitCode != 1 || res.Stderr != want {
-		t.Errorf("exit code = %d, stderr=%q, want %q", res.ExitCode, res.Stderr, want)
+	want := "baton: open a tab for my-app/YYYY-MM-DD-1:claude: guake: exit status 1: no dbus\n"
+	if got := stable(res.Stderr); res.ExitCode != 1 || got != want {
+		t.Errorf("exit code = %d, stderr=%q, want %q", res.ExitCode, got, want)
 	}
 }
 
@@ -414,10 +417,10 @@ func TestNew_TheSessionTheTabStartsShowsUpInLsUnderTheProject(t *testing.T) {
 	runHook(t, env, "claude-personal", "SessionStart", "abc123", repo)
 	res := env.Run("ls")
 
-	want := "PROJECT  AGENT   PROFILE          RUNTIME  STATUS\n" +
-		"my-app   claude  claude-personal  host     waiting_input\n"
-	if res.ExitCode != 0 || res.Stdout != want {
-		t.Errorf("exit code = %d, stdout=%q, want %q", res.ExitCode, res.Stdout, want)
+	want := "PROJECT  TASK          AGENT   PROFILE          RUNTIME  STATUS\n" +
+		"my-app   YYYY-MM-DD-1  claude  claude-personal  host     waiting_input\n"
+	if got := stable(res.Stdout); res.ExitCode != 0 || got != want {
+		t.Errorf("exit code = %d, stdout=%q, want %q", res.ExitCode, got, want)
 	}
 	if got := env.ListDir(".baton/projects"); !reflect.DeepEqual(got, []string{".lock", "my-app"}) {
 		t.Errorf("projects = %v, want my-app registered once", got)

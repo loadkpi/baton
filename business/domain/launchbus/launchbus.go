@@ -8,9 +8,10 @@ import (
 
 	"github.com/loadkpi/baton/business/domain/configbus"
 	"github.com/loadkpi/baton/business/domain/projectbus"
+	"github.com/loadkpi/baton/business/domain/workbus"
 	"github.com/loadkpi/baton/business/types/agent"
 	"github.com/loadkpi/baton/business/types/runtime"
-	"github.com/loadkpi/baton/business/types/taskname"
+	"github.com/loadkpi/baton/business/types/taskref"
 )
 
 // Tab is what a Terminal opens: a tab in Dir, titled Title, that runs Command.
@@ -33,11 +34,12 @@ type Terminal interface {
 // Request asks for a new Session.
 type Request struct {
 	// Home is the home directory of the user.
-	Home    string
-	Project projectbus.Project
-	// Task is the name that goes into the tab title; the zero value means
-	// none. Tasks themselves arrive with ticket 07.
-	Task    taskname.Name
+	Home string
+	// Place is the Working copy to start in.
+	Place projectbus.Place
+	// Task is the Task to continue or start; the zero value starts a new
+	// unnamed one.
+	Task    taskref.Ref
 	Agent   agent.Agent
 	Profile configbus.Profile
 }
@@ -45,22 +47,27 @@ type Request struct {
 // Bus is the domain of starting Sessions.
 type Bus struct {
 	terminal Terminal
+	work     *workbus.Bus
 }
 
-// New creates the domain over a Terminal.
-func New(terminal Terminal) *Bus {
-	return &Bus{terminal: terminal}
+// New creates the domain over a Terminal and the domain that decides the Task.
+func New(terminal Terminal, work *workbus.Bus) *Bus {
+	return &Bus{terminal: terminal, work: work}
 }
 
-// Start opens a tab that runs the Agent of the request.
+// Start makes the Task of the request the current one of the Working copy and
+// opens a tab that runs the Agent in it. Nothing is changed when the Project's
+// Runtime cannot be started yet or when the Working copy has an active Session.
 func (b *Bus) Start(ctx context.Context, r Request) error {
-	var tab Tab
-	switch r.Project.Runtime {
-	case runtime.Host:
-		tab = hostTab(r)
-	default:
-		return fmt.Errorf("project %s runs in the %s Runtime, which baton new cannot start yet", r.Project.Name, r.Project.Runtime)
+	project := r.Place.Project
+	if project.Runtime != runtime.Host {
+		return fmt.Errorf("project %s runs in the %s Runtime, which baton new cannot start yet", project.Name, project.Runtime)
 	}
+	task, err := b.work.Begin(ctx, r.Place, r.Task)
+	if err != nil {
+		return err
+	}
+	tab := hostTab(r, task)
 	if err := b.terminal.OpenTab(ctx, tab); err != nil {
 		return fmt.Errorf("open a tab for %s: %w", tab.Title, err)
 	}

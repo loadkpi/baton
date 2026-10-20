@@ -25,8 +25,21 @@ func newRepo(t *testing.T, env *batontest.Env, name string) string {
 	return dir
 }
 
-// lsRows runs `baton ls` and returns the lines under the header as cells.
+// lsRows runs `baton ls` and returns the lines under the header as cells, with
+// the date of generated Task names replaced by <date> (see stable).
 func lsRows(t *testing.T, env *batontest.Env) [][]string {
+	t.Helper()
+	rows := lsRowsRaw(t, env)
+	for _, row := range rows {
+		for i := range row {
+			row[i] = stable(row[i])
+		}
+	}
+	return rows
+}
+
+// lsRowsRaw runs `baton ls` and returns the lines under the header as cells.
+func lsRowsRaw(t *testing.T, env *batontest.Env) [][]string {
 	t.Helper()
 	res := env.Run("ls")
 	if res.ExitCode != 0 {
@@ -53,10 +66,10 @@ func TestLs_ShowsAHostClaudeSessionWithItsProjectProfileRuntimeAndStatus(t *test
 	if res.ExitCode != 0 {
 		t.Fatalf("exit code = %d, stderr=%q", res.ExitCode, res.Stderr)
 	}
-	want := "PROJECT  AGENT   PROFILE          RUNTIME  STATUS\n" +
-		"my-app   claude  claude-personal  host     waiting_input\n"
-	if res.Stdout != want {
-		t.Errorf("stdout = %q, want %q", res.Stdout, want)
+	want := "PROJECT  TASK          AGENT   PROFILE          RUNTIME  STATUS\n" +
+		"my-app   YYYY-MM-DD-1  claude  claude-personal  host     waiting_input\n"
+	if got := stable(res.Stdout); got != want {
+		t.Errorf("stdout = %q, want %q", got, want)
 	}
 }
 
@@ -94,7 +107,7 @@ func TestLs_StatusFollowsTheLastEventPerTheStatusTable(t *testing.T) {
 
 			rows := lsRows(t, env)
 
-			if len(rows) != 1 || rows[0][4] != tt.status {
+			if len(rows) != 1 || rows[0][5] != tt.status {
 				t.Errorf("rows = %v, want one Session with status %s", rows, tt.status)
 			}
 		})
@@ -117,7 +130,7 @@ func TestLs_AWholeTurnWalksThroughTheStatuses(t *testing.T) {
 	}
 	for _, step := range steps {
 		runHook(t, env, "claude-personal", step.event, "abc123", repo)
-		if rows := lsRows(t, env); len(rows) != 1 || rows[0][4] != step.status {
+		if rows := lsRows(t, env); len(rows) != 1 || rows[0][5] != step.status {
 			t.Fatalf("after %s: rows = %v, want status %s", step.event, rows, step.status)
 		}
 	}
@@ -132,7 +145,7 @@ func TestLs_AnEventTheStatusTableDoesNotKnowKeepsTheEarlierStatus(t *testing.T) 
 
 	rows := lsRows(t, env)
 
-	if len(rows) != 1 || rows[0][4] != "running" {
+	if len(rows) != 1 || rows[0][5] != "running" {
 		t.Errorf("rows = %v, want running", rows)
 	}
 }
@@ -145,7 +158,7 @@ func TestLs_ASessionWithOnlyUnknownEventsIsListedAsUnknown(t *testing.T) {
 
 	rows := lsRows(t, env)
 
-	if len(rows) != 1 || rows[0][4] != "unknown" {
+	if len(rows) != 1 || rows[0][5] != "unknown" {
 		t.Errorf("rows = %v, want unknown", rows)
 	}
 }
@@ -161,9 +174,9 @@ func TestLs_ListsEverySessionAcrossProjectsAndProfilesMostRecentFirst(t *testing
 	rows := lsRows(t, env)
 
 	want := [][]string{
-		{"app", "claude", "claude-personal", "host", "waiting_approval"},
-		{"api", "claude", "claude-work", "host", "running"},
-		{"app", "claude", "claude-personal", "host", "waiting_input"},
+		{"app", "YYYY-MM-DD-1", "claude", "claude-personal", "host", "waiting_approval"},
+		{"api", "YYYY-MM-DD-1", "claude", "claude-work", "host", "running"},
+		{"app", "YYYY-MM-DD-1", "claude", "claude-personal", "host", "waiting_input"},
 	}
 	if !reflect.DeepEqual(rows, want) {
 		t.Errorf("rows = %v, want %v", rows, want)
@@ -247,7 +260,7 @@ func TestLs_RegistersAnUnknownProjectWithTheHostRuntimeUnlessItHasASandbox(t *te
 	}
 	// The Runtime of the Session is the one it reported, not the default of its Project.
 	for _, row := range lsRows(t, env) {
-		if row[3] != "host" {
+		if row[4] != "host" {
 			t.Errorf("row = %v, want Runtime host as reported by the hook", row)
 		}
 	}
@@ -271,8 +284,8 @@ func TestLs_AProjectNameThatIsTakenGetsASuffixAndEachRepositoryKeepsItsName(t *t
 	again := lsRows(t, env)
 
 	want := [][]string{
-		{"app-2", "claude", "claude-personal", "host", "running"},
-		{"app", "claude", "claude-personal", "host", "waiting_input"},
+		{"app-2", "YYYY-MM-DD-1", "claude", "claude-personal", "host", "running"},
+		{"app", "YYYY-MM-DD-1", "claude", "claude-personal", "host", "waiting_input"},
 	}
 	if !reflect.DeepEqual(rows, want) || !reflect.DeepEqual(again, want) {
 		t.Errorf("rows = %v, again = %v, want %v", rows, again, want)
@@ -342,7 +355,7 @@ func TestLs_ReadsTheLastEventOfAFileWhoseLinesAreLargerThanAReadChunk(t *testing
 
 	rows := lsRows(t, env)
 
-	if len(rows) != 1 || rows[0][4] != "waiting_approval" {
+	if len(rows) != 1 || rows[0][5] != "waiting_approval" {
 		t.Errorf("rows = %v, want waiting_approval", rows)
 	}
 }
@@ -364,7 +377,7 @@ func TestLs_IgnoresALineThatIsStillBeingWrittenAndOneThatIsNotAnEvent(t *testing
 
 	rows := lsRows(t, env)
 
-	if len(rows) != 1 || rows[0][4] != "running" {
+	if len(rows) != 1 || rows[0][5] != "running" {
 		t.Errorf("rows = %v, want running", rows)
 	}
 }
@@ -411,8 +424,47 @@ func TestLs_ASessionStartedByHandShowsUpAfterSync(t *testing.T) {
 
 	rows := lsRows(t, env)
 
-	want := [][]string{{"my-app", "claude", "claude-personal", "host", "waiting_input"}}
+	want := [][]string{{"my-app", "YYYY-MM-DD-1", "claude", "claude-personal", "host", "waiting_input"}}
 	if !reflect.DeepEqual(rows, want) {
 		t.Errorf("rows = %v, want %v", rows, want)
+	}
+}
+
+// addWorktree commits once in repo (a worktree needs a commit to start from)
+// and adds a git worktree called name next to it, on a new branch.
+func addWorktree(t *testing.T, env *batontest.Env, repo, name string) string {
+	t.Helper()
+	if res := env.Command("git", "-C", repo, "commit", "--quiet", "--allow-empty", "-m", "init"); res.ExitCode != 0 {
+		t.Fatalf("git commit: %s", res.Stderr)
+	}
+	wt := filepath.Join(filepath.Dir(repo), name)
+	if res := env.Command("git", "-C", repo, "worktree", "add", "--quiet", "-b", name, wt); res.ExitCode != 0 {
+		t.Fatalf("git worktree add: %s", res.Stderr)
+	}
+	return wt
+}
+
+func TestLs_AGitWorktreeIsAWorkingCopyOfTheSameProjectNotAProjectOfItsOwn(t *testing.T) {
+	env := newEnv(t)
+	repo := newRepo(t, env, "my-app")
+	wt := addWorktree(t, env, repo, "my-app-feature")
+	sub := filepath.Join(wt, "pkg")
+	if err := os.MkdirAll(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// The worktree is met first: the Project must still be the main repository.
+	runHook(t, env, "claude-personal", "Stop", "s1", sub)
+	runHook(t, env, "claude-personal", "Stop", "s2", repo)
+
+	rows := lsRows(t, env)
+
+	if len(rows) != 2 || rows[0][0] != "my-app" || rows[1][0] != "my-app" {
+		t.Errorf("rows = %v, want both Sessions in Project my-app", rows)
+	}
+	if got := env.ListDir(".baton/projects"); !reflect.DeepEqual(got, []string{".lock", "my-app"}) {
+		t.Errorf("projects = %v, want only my-app", got)
+	}
+	if got, want := env.ReadFile(".baton/projects/my-app/project.toml"), "path = \""+repo+"\"\nruntime = \"host\"\n"; got != want {
+		t.Errorf("project.toml = %q, want the main checkout %q", got, want)
 	}
 }

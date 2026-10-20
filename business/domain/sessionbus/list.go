@@ -23,6 +23,17 @@ type Session struct {
 	Status status.Status
 	// Since is when the Event that decided the status was reported.
 	Since time.Time
+	// Started is when the Session's first Event was reported.
+	Started time.Time
+	// Last is when its newest Event, of any kind, was reported.
+	Last time.Time
+}
+
+// Active reports whether the Session can still be doing something: its last
+// Event is not the end of the conversation. A Session that crashed without a
+// SessionEnd stays active until lost detection arrives (ticket 11).
+func (s Session) Active() bool {
+	return s.Status != status.Ended
 }
 
 // List returns every Session with a status derived from its last Event that
@@ -46,9 +57,13 @@ func (b *Bus) List(ctx context.Context) ([]Session, error) {
 		s := Session{
 			Agent: first.Agent, Profile: first.Profile, Runtime: first.Runtime,
 			SessionID: first.SessionID, CWD: first.CWD,
-			Status: status.Unknown, Since: first.TS,
+			Status: status.Unknown, Since: first.TS, Started: first.TS, Last: first.TS,
 		}
+		newest := true
 		err = b.storer.QueryEventsBackward(ctx, ref, func(e Event) bool {
+			if newest {
+				s.Last, newest = e.TS, false
+			}
 			st, known := status.FromEvent(e.Agent, e.Name)
 			if known {
 				s.Status, s.Since = st, e.TS
