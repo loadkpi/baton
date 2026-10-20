@@ -39,8 +39,41 @@ type Session struct {
 	TurnStart time.Time
 	// Started is when the Session's first Event was reported.
 	Started time.Time
-	// Last is when its newest Event, of any kind, was reported.
+	// Last is when its newest Event that the Agent reported was reported; an
+	// Event Baton wrote itself (`baton session end`) does not count.
 	Last time.Time
+	// Liveness is what the Runtime said about the Agent process of the
+	// Session's newest Event when it was asked in List; Unjudged when it was
+	// not or could not be. PID is that process, 0 when no process was named.
+	Liveness Liveness
+	PID      int
+}
+
+// Liveness is what Baton could find out about the Agent process of a Session
+// that has not ended.
+type Liveness int
+
+// The values of Session.Liveness. The zero value is the safe one: a Session
+// whose process could not be judged is never taken for dead.
+const (
+	// Unjudged means Baton cannot tell whether the Agent still runs: the
+	// newest Event names no usable process (no PID, or only the hook's
+	// parent because the Agent was not found among its ancestors), the
+	// Runtime is not known, or it did not answer (docker down, an Event from
+	// another machine). Such a Session is never found `lost`, so if its Agent
+	// is gone only `baton session end` can clear it.
+	Unjudged Liveness = iota
+	// AgentRunning means the Runtime found the process running.
+	AgentRunning
+	// AgentGone means the Runtime found the process gone; the Session is
+	// `lost`.
+	AgentGone
+)
+
+// CannotJudge reports whether the Session counts as active only because Baton
+// has no way to tell whether its Agent is gone.
+func (s Session) CannotJudge() bool {
+	return s.Active() && s.Liveness == Unjudged
 }
 
 // Key identifies a Session: the Agent's own session id is unique per Agent, and
@@ -93,14 +126,10 @@ func (b *Bus) List(ctx context.Context) (sessions []Session, warnings []string, 
 			Status: status.Unknown, Since: first.TS, Started: first.TS, Last: first.TS,
 		}
 		var proc *runtimebus.Process
-		newest, decided := true, false
-		err = b.storer.QueryEventsBackward(ctx, ref, func(e Event) bool {
-			if newest {
-				s.Last, newest = e.TS, false
-				if proc = toBusProcess(e); proc != nil {
-					proc.Project = ref.Project
-				}
-			}
+		newest, heard, decided, settled := true, false, false, false
+		// derive reads the Events that decide the status, newest first, and
+		// says whether it needs older ones.
+		derive := func(e Event) bool {
 			st, known := status.FromEvent(e.Agent, e.Name)
 			if !decided {
 				if !known {
@@ -117,6 +146,23 @@ func (b *Bus) List(ctx context.Context) (sessions []Session, warnings []string, 
 				return false
 			}
 			return !known || st == status.Running || st == status.WaitingApproval
+		}
+		err = b.storer.QueryEventsBackward(ctx, ref, func(e Event) bool {
+			if newest {
+				newest = false
+				if proc = toBusProcess(e); proc != nil {
+					proc.Project = ref.Project
+				}
+			}
+			// Last is the Agent's newest Event, which an Event Baton wrote
+			// on top of it (`baton session end`) must not hide.
+			if !heard && e.FromAgent() {
+				s.Last, heard = e.TS, true
+			}
+			if !settled {
+				settled = !derive(e)
+			}
+			return !settled || !heard
 		})
 		if err != nil {
 			return nil, nil, err
@@ -139,9 +185,10 @@ func (b *Bus) List(ctx context.Context) (sessions []Session, warnings []string, 
 // toBusProcess is the process the newest Event of a Session names, or nil when
 // the Event does not name one that can be judged: no PID or start time was
 // recorded, or the PID is only the hook's parent because the Agent was not
-// found among its ancestors, which says nothing about the Agent.
+// found among its ancestors, which says nothing about the Agent. An Event
+// Baton wrote itself names none.
 func toBusProcess(e Event) *runtimebus.Process {
-	if e.AgentPID <= 0 || e.AgentStart == 0 || e.AgentPIDFallback {
+	if !e.FromAgent() || e.AgentPID <= 0 || e.AgentStart == 0 || e.AgentPIDFallback {
 		return nil
 	}
 	return &runtimebus.Process{Host: e.Host, PID: e.AgentPID, Start: e.AgentStart, Container: e.Container, Seen: e.TS}
@@ -154,6 +201,7 @@ func (b *Bus) markLost(ctx context.Context, sessions []Session, procs []*runtime
 	byRuntime := make(map[runtime.Runtime][]int)
 	for i, s := range sessions {
 		if s.Status != status.Ended && procs[i] != nil {
+			sessions[i].PID = procs[i].PID
 			byRuntime[s.Runtime] = append(byRuntime[s.Runtime], i)
 		}
 	}
@@ -178,8 +226,15 @@ func (b *Bus) markLost(ctx context.Context, sessions []Session, procs []*runtime
 			warnings = append(warnings, fmt.Sprintf("cannot tell whether %s sessions are still running, showing what their events say: %v", rt, err))
 		}
 		for j, i := range indexes {
-			if j < len(verdicts) && verdicts[j] == runtimebus.ProcessGone {
+			if j >= len(verdicts) {
+				continue
+			}
+			switch verdicts[j] {
+			case runtimebus.ProcessGone:
 				sessions[i].Status = status.Lost
+				sessions[i].Liveness = AgentGone
+			case runtimebus.ProcessAlive:
+				sessions[i].Liveness = AgentRunning
 			}
 		}
 	}

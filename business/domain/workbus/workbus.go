@@ -160,8 +160,12 @@ type ActiveError struct {
 
 func (e *ActiveError) Error() string {
 	s := e.Session
-	return fmt.Sprintf("working copy %s of project %s already has an active session: %s, profile %s, session %s, last event %s (%s); end it, or hand the Task over with baton handoff",
+	msg := fmt.Sprintf("working copy %s of project %s already has an active session: %s, profile %s, session %s, last event %s (%s); end it, or hand the Task over with baton handoff",
 		e.Place.WorkingCopy, e.Place.Project.Name, s.Agent, s.Profile, s.SessionID, s.Last.UTC().Format(time.RFC3339Nano), s.Status)
+	if s.CannotJudge() {
+		msg += fmt.Sprintf("; baton cannot tell whether its Agent is still running, so if it is gone, run %s", s.EndCommand())
+	}
+	return msg
 }
 
 // Begin makes a Task the current one of a Working copy, for a Session that is

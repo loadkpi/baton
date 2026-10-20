@@ -114,6 +114,12 @@ func toAppWaiting(task string, active []sessionbus.Session) string {
 	if len(active) > 1 {
 		line += fmt.Sprintf(" (%d more sessions are active in that working copy)", len(active)-1)
 	}
+	for _, a := range active {
+		if a.CannotJudge() {
+			line += fmt.Sprintf("; baton cannot tell whether session %s is still running, so if its Agent is gone, run %s", a.SessionID, a.EndCommand())
+			break
+		}
+	}
 	return line
 }
 

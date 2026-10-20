@@ -45,7 +45,7 @@ One native Agent conversation under one Profile, with exactly one native session
 _Avoid_: run, chat, process
 
 **Event**:
-A record of something that happened in a Session, as reported by the Agent. Everything Baton knows about a Session, including its status, is derived from Events.
+A record of something that happened in a Session, as reported by the Agent (the one exception is the `SessionEnd` that `baton session end` writes, which says it is Baton's own). Everything Baton knows about a Session, including its status, is derived from Events.
 _Avoid_: log, message, trace
 
 **Terminal**:

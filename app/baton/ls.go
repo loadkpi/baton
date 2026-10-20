@@ -39,7 +39,7 @@ func runLs(ctx context.Context, c console, home string, args []string) int {
 	w := tabwriter.NewWriter(c.stdout, 0, 0, 2, ' ', 0)
 	_, _ = fmt.Fprintln(w, "PROJECT\tTASK\tAGENT\tSESSION\tPROFILE\tRUNTIME\tSTATUS")
 	for _, l := range lines {
-		_, _ = fmt.Fprintln(w, strings.Join(l.cells, "\t"))
+		_, _ = fmt.Fprintln(w, joinCells(l.cells))
 	}
 	_ = w.Flush()
 	for _, l := range lines {
@@ -80,11 +80,7 @@ type line struct {
 // rows, the most recent first.
 func toAppLines(l workbus.Listing) []line {
 	lines := make([]line, 0, len(l.Sessions)+len(l.Silent))
-	ids := make([]string, len(l.Sessions))
-	for i, p := range l.Sessions {
-		ids[i] = p.Session.SessionID
-	}
-	n := sessionIDLen(ids)
+	n := sessionIDLenOf(l.Sessions)
 	for _, p := range l.Sessions {
 		lines = append(lines, line{at: p.Session.Since, cells: toAppSessionRow(p, n)})
 	}
@@ -95,6 +91,9 @@ func toAppLines(l workbus.Listing) []line {
 	return lines
 }
 
+// joinCells is a row of the table as the tab writer takes it.
+func joinCells(cells []string) string { return strings.Join(cells, "\t") }
+
 // toAppLaunchRow converts a launch with no Event to the cells of its line.
 func toAppLaunchRow(l sessionbus.Launch) []string {
 	return []string{l.Project.String(), l.Task, l.Agent.String(), noSession, l.Profile.String(), l.Runtime.String(), noEvents}
@@ -104,6 +103,16 @@ func toAppLaunchRow(l sessionbus.Launch) []string {
 // only once they are trusted.
 func toAppLaunchHint(l sessionbus.Launch) string {
 	return fmt.Sprintf("%s has reported no events. Codex runs Baton's status hooks only after you trust them: run /hooks in that session.", l.Title)
+}
+
+// sessionIDLenOf is sessionIDLen of the ids of the Sessions: the length the
+// SESSION column has for them.
+func sessionIDLenOf(sessions []workbus.Placed) int {
+	ids := make([]string, len(sessions))
+	for i, p := range sessions {
+		ids[i] = p.Session.SessionID
+	}
+	return sessionIDLen(ids)
 }
 
 // sessionIDLen is the number of characters of each session id that the SESSION

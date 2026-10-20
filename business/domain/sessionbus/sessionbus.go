@@ -45,7 +45,20 @@ type Event struct {
 	CWD  string
 	// Payload is what the Agent sent, as one line of JSON.
 	Payload []byte
+	// Source says who wrote the Event: empty for the Agent's hook (the only
+	// source until `baton session end`), SourceBaton for Baton itself. An
+	// Event of Baton is not Agent data: it names no process, and carries no
+	// tool call.
+	Source string
 }
+
+// SourceBaton marks an Event that Baton wrote on its own account, not one that
+// an Agent reported.
+const SourceBaton = "baton"
+
+// FromAgent reports whether the Agent reported the Event, as opposed to Baton
+// having written it.
+func (e Event) FromAgent() bool { return e.Source == "" }
 
 // Process is a process of the machine the hook runs on.
 type Process struct {
@@ -62,6 +75,10 @@ type Storer interface {
 	// SaveEvent appends the Event to the file of its Session, under a lock
 	// on the file, creating it readable by its owner only.
 	SaveEvent(ctx context.Context, e Event) error
+	// SaveEventIn appends the Event to the file ref names, wherever that
+	// is (a Session in a container has its file in its Project's directory),
+	// under the same lock on the file as SaveEvent.
+	SaveEventIn(ctx context.Context, ref SessionRef, e Event) error
 	// QuerySessions lists the Event files.
 	QuerySessions(ctx context.Context) ([]SessionRef, error)
 	// QueryFirstEvent returns the oldest Event of the Session; ok is false

@@ -53,15 +53,17 @@ type fileEvent struct {
 	Agent            string          `json:"agent"`
 	Profile          string          `json:"profile"`
 	Runtime          string          `json:"runtime"`
-	Host             string          `json:"host"`
-	AgentPID         int             `json:"agent_pid"`
-	AgentStart       uint64          `json:"agent_start"`
+	Host             string          `json:"host,omitempty"`
+	AgentPID         int             `json:"agent_pid,omitempty"`
+	AgentStart       uint64          `json:"agent_start,omitempty"`
 	AgentPIDFallback bool            `json:"agent_pid_fallback,omitempty"`
 	Container        string          `json:"container,omitempty"`
 	SessionID        string          `json:"session_id"`
 	Event            string          `json:"event"`
 	CWD              string          `json:"cwd"`
 	Payload          json.RawMessage `json:"payload"`
+	// Source is set, only then, on an Event that Baton wrote itself.
+	Source string `json:"source,omitempty"`
 }
 
 func toFileEvent(e sessionbus.Event) fileEvent {
@@ -80,6 +82,7 @@ func toFileEvent(e sessionbus.Event) fileEvent {
 		Event:            e.Name,
 		CWD:              e.CWD,
 		Payload:          e.Payload,
+		Source:           e.Source,
 	}
 }
 
@@ -104,13 +107,23 @@ func (s *Store) refPath(ref sessionbus.SessionRef) string {
 // The raw payload is written as it came, apart from the white space between
 // its tokens, which would break the one line per Event.
 func (s *Store) SaveEvent(_ context.Context, e sessionbus.Event) error {
+	return appendEvent(s.eventPath(e.Agent.String(), e.SessionID), e)
+}
+
+// SaveEventIn appends the Event to the file ref names, with the same lock and
+// the same line as SaveEvent, so that it never interleaves with a hook's.
+func (s *Store) SaveEventIn(_ context.Context, ref sessionbus.SessionRef, e sessionbus.Event) error {
+	return appendEvent(s.refPath(ref), e)
+}
+
+func appendEvent(path string, e sessionbus.Event) error {
 	var line bytes.Buffer
 	enc := json.NewEncoder(&line)
 	enc.SetEscapeHTML(false) // the payload stays as the Agent wrote it
 	if err := enc.Encode(toFileEvent(e)); err != nil {
 		return err
 	}
-	return jsonl.Append(s.eventPath(e.Agent.String(), e.SessionID), bytes.TrimRight(line.Bytes(), "\n"), 0o600)
+	return jsonl.Append(path, bytes.TrimRight(line.Bytes(), "\n"), 0o600)
 }
 
 // QuerySessions lists the *.jsonl files of the host's sessions directory and of
@@ -218,6 +231,6 @@ func toBusEvent(line []byte) (sessionbus.Event, error) {
 	return sessionbus.Event{
 		TS: ts, Agent: a, Profile: p, Runtime: r, Host: fe.Host,
 		AgentPID: fe.AgentPID, AgentStart: fe.AgentStart, AgentPIDFallback: fe.AgentPIDFallback, Container: fe.Container,
-		SessionID: fe.SessionID, Name: fe.Event, CWD: fe.CWD, Payload: fe.Payload,
+		SessionID: fe.SessionID, Name: fe.Event, CWD: fe.CWD, Payload: fe.Payload, Source: fe.Source,
 	}, nil
 }

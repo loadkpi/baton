@@ -6,12 +6,12 @@ Found on real Docker: a Session whose recorded `agent_pid` is only the hook's pa
 
 **Blocked by:** 11
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] `baton session end <session>` takes the Session id as `baton ls` shows it (the SESSION column prefix) or in full; an ambiguous or unknown prefix is refused and lists the candidates.
-- [ ] It appends one Event line to the Session's own Event file under the same file lock as `baton hook`, marked as written by Baton and not by the Agent (e.g. `event: "SessionEnd"`, `source: "baton"`, `payload` with the reason `ended by hand`), so the archive stays raw and the origin is visible.
-- [ ] After it, the Session's status is `ended`, it is not active, `baton new` in its Working copy is allowed, and a waiting `baton handoff` proceeds.
-- [ ] It refuses, without `--force`, a Session that Baton can see is still running (its PID is alive per the Runtime's `Alive`), naming what it saw; `--force` ends it anyway. It never kills any process.
-- [ ] Works for host, sandbox and compose Sessions (the Event file of a container Session lives under `~/.baton/projects/<project>/sessions/` on the host).
-- [ ] The refusal of `baton new` for an active Session, and `baton handoff` while waiting, mention `baton session end <id>` when the blocking Session cannot be judged (fallback PID, no PID, or Runtime unanswered).
-- [ ] Tested at the binary seam with a fallback-PID Session that blocks `baton new`, a live-PID Session refused without `--force`, and a waiting `baton handoff` released by it.
+- [x] `baton session end <session>` takes the Session id as `baton ls` shows it (the SESSION column prefix) or in full; an ambiguous or unknown prefix is refused and lists the candidates.
+- [x] It appends one Event line to the Session's own Event file under the same file lock as `baton hook`, marked as written by Baton and not by the Agent (e.g. `event: "SessionEnd"`, `source: "baton"`, `payload` with the reason `ended by hand`), so the archive stays raw and the origin is visible.
+- [x] After it, the Session's status is `ended`, it is not active, `baton new` in its Working copy is allowed, and a waiting `baton handoff` proceeds.
+- [x] It refuses, without `--force`, a Session that Baton can see is still running (its PID is alive per the Runtime's `Alive`), naming what it saw; `--force` ends it anyway. It never kills any process.
+- [x] Works for host, sandbox and compose Sessions (the Event file of a container Session lives under `~/.baton/projects/<project>/sessions/` on the host).
+- [x] The refusal of `baton new` for an active Session, and `baton handoff` while waiting, mention `baton session end <id>` when the blocking Session cannot be judged (fallback PID, no PID, or Runtime unanswered).
+- [x] Tested at the binary seam with a fallback-PID Session that blocks `baton new`, a live-PID Session refused without `--force`, and a waiting `baton handoff` released by it.

@@ -309,7 +309,9 @@ func TestTask_NewRefusesWhileTheWorkingCopyHasAnActiveSessionAndNamesIt(t *testi
 
 	want := "baton: working copy " + repo + " of project my-app already has an active session: " +
 		"claude, profile claude-personal, session s1, last event 2031-03-04T10:30:00Z (waiting_input); " +
-		"end it, or hand the Task over with baton handoff\n"
+		"end it, or hand the Task over with baton handoff; " +
+		// The Event is from a machine other than this one, which cannot be judged.
+		"baton cannot tell whether its Agent is still running, so if it is gone, run baton session end s1\n"
 	if res.ExitCode != 1 || res.Stderr != want {
 		t.Errorf("exit code = %d, stderr=%q, want %q", res.ExitCode, res.Stderr, want)
 	}

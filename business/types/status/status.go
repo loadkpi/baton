@@ -35,6 +35,9 @@ const (
 	TurnStart = "UserPromptSubmit"
 	// SessionStart is the Event that begins a Session, before any turn.
 	SessionStart = "SessionStart"
+	// SessionEnd is the Event that ends a Session. Both Agents report it, and
+	// Baton writes it itself for a Session it was told is over.
+	SessionEnd = "SessionEnd"
 )
 
 // claudeTable is the Claude Code column of the status table in DESIGN.md.
@@ -46,7 +49,7 @@ var claudeTable = map[string]Status{
 	"PermissionRequest":  WaitingApproval,
 	"SessionStart":       WaitingInput,
 	"Stop":               WaitingInput,
-	"SessionEnd":         Ended,
+	SessionEnd:           Ended,
 }
 
 // codexTable is the Codex column of the same table. Sync installs its Events
@@ -59,7 +62,7 @@ var codexTable = map[string]Status{
 	"SessionStart":      WaitingInput,
 	"Stop":              WaitingInput,
 	"Interrupt":         WaitingInput,
-	"SessionEnd":        Ended,
+	SessionEnd:          Ended,
 }
 
 func tableOf(a agent.Agent) map[string]Status {
