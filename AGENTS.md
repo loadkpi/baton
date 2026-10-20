@@ -38,9 +38,10 @@ Primitive types live at the edges (`app` flags and output, file/JSON/TOML docume
 There is exactly one seam: the built `baton` executable, run as a subprocess against an isolated `HOME` and a temporary git repository. Do not write tests against internal Go packages. If a change seems to need another seam, stop and raise it instead of inventing one.
 
 - `test/main_test.go` builds the binary once per test run (`TestMain`). Each test starts with `env := newEnv(t)`.
-- `internal/batontest` provides `Env`: isolated `HOME`, a source git repository (`SourceFile`, `CommitSource`), Profile directories, `WriteConfig`, `Run` / `RunWithStdin`, file helpers (`ReadFile`, `Exists`, `Mode`, `ModTime`).
+- `internal/batontest` provides `Env`: isolated `HOME`, a source git repository (`SourceFile`, `CommitSource`), Profile directories, `WriteConfig`, `Run` / `RunWithStdin`, file helpers (`ReadFile`, `Exists`, `ListDir`, `Mode`, `ModTime`).
 - The outside world is stubbed on `PATH`. Stubs for `guake`, `docker`, `notify-send`, `claude` and `codex` are installed in every `Env` and record their calls; read them with `env.Calls(name)`, customize with `env.Stub(name, batontest.WithScript(...))`. Add stubs for new external programs in the same way. Git is real. Telegram is a local HTTP server.
 - Processes started by an `Env` get an environment built from scratch (no inherited variables, no `XDG_*`, no git config). Run other programs with `env.Command`, which resolves them against the Env's `PATH`, never the test process's.
+- Questions to the user are tested through a pseudo-terminal: `env.RunTerminal(replies, args...)` types one reply per `[y/N] ` prompt, `env.StartTerminal` gives `Expect` / `Send` / `Wait` for anything less regular. The pseudo-terminal is made with the standard library (Linux only), so there is no pty dependency. "No terminal" is `env.RunWithStdin`, whose stdin is a pipe.
 - Assert on external behavior only: stdout, stderr, exit code, files, stub calls. Expected values are literals, not recomputed the way the code does it.
 - Work test first, in vertical slices: one failing test, the minimal code to pass, next test. Refactor at the end.
 

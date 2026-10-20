@@ -5,8 +5,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
+	"path"
 	"path/filepath"
 	"slices"
 	"sort"
@@ -15,6 +17,7 @@ import (
 	"github.com/loadkpi/baton/business/domain/syncbus"
 	"github.com/loadkpi/baton/business/types/profilename"
 	"github.com/loadkpi/baton/foundation/atomicfile"
+	"github.com/loadkpi/baton/foundation/git"
 )
 
 // Store reads the source repository, writes Profile directories and keeps
@@ -48,31 +51,41 @@ func checkDir(dir string) error {
 	return nil
 }
 
-// QuerySkills reads every skill directory under <source>/skills. Entries
+// QuerySource reads <source>/AGENTS.md and every skill directory under
+// <source>/skills. Entries
 // starting with "." and plain files are ignored; a directory without SKILL.md
 // is reported as skipped.
-func (s *Store) QuerySkills(_ context.Context, source string) (syncbus.SourceSkills, error) {
+func (s *Store) QuerySource(_ context.Context, source string) (syncbus.Source, error) {
 	if err := checkDir(source); err != nil {
-		return syncbus.SourceSkills{}, fmt.Errorf("source repository: %w", err)
+		return syncbus.Source{}, fmt.Errorf("source repository: %w", err)
+	}
+
+	var res syncbus.Source
+	instructions, err := os.ReadFile(filepath.Join(source, "AGENTS.md"))
+	switch {
+	case err == nil:
+		res.Instructions = string(instructions)
+		res.HasInstructions = strings.TrimSpace(res.Instructions) != ""
+	case !os.IsNotExist(err):
+		return syncbus.Source{}, err
 	}
 
 	root := filepath.Join(source, "skills")
 	entries, err := os.ReadDir(root)
 	if os.IsNotExist(err) {
-		return syncbus.SourceSkills{}, nil
+		return res, nil
 	}
 	if err != nil {
-		return syncbus.SourceSkills{}, err
+		return syncbus.Source{}, err
 	}
 
-	var res syncbus.SourceSkills
 	for _, e := range entries {
 		if !e.IsDir() || strings.HasPrefix(e.Name(), ".") {
 			continue
 		}
 		files, err := readFiles(filepath.Join(root, e.Name()))
 		if err != nil {
-			return syncbus.SourceSkills{}, err
+			return syncbus.Source{}, err
 		}
 		if !slices.ContainsFunc(files, func(f syncbus.File) bool { return f.Path == "SKILL.md" }) {
 			res.Skipped = append(res.Skipped, e.Name())
@@ -131,10 +144,40 @@ func normalizeMode(m fs.FileMode) fs.FileMode {
 	return 0o644
 }
 
-// WriteFile writes rel (slash-separated) inside profileDir atomically, unless
-// the file is already as wanted.
-func (s *Store) WriteFile(_ context.Context, profileDir, rel string, data []byte, mode fs.FileMode) (bool, error) {
-	return atomicfile.WriteIfChanged(filepath.Join(profileDir, filepath.FromSlash(rel)), data, mode)
+// WriteFile writes rel (slash-separated) inside profileDir atomically.
+func (s *Store) WriteFile(_ context.Context, profileDir, rel string, data []byte, mode fs.FileMode) error {
+	return atomicfile.Write(filepath.Join(profileDir, filepath.FromSlash(rel)), data, mode)
+}
+
+// RemoveAll removes rel (slash-separated) inside profileDir: a directory with
+// its content, or a symbolic link itself (never its target).
+func (s *Store) RemoveAll(_ context.Context, profileDir, rel string) error {
+	return os.RemoveAll(filepath.Join(profileDir, filepath.FromSlash(rel)))
+}
+
+// QueryTracked returns those of paths that git tracks.
+func (s *Store) QueryTracked(ctx context.Context, paths []string) ([]string, error) {
+	return git.Tracked(ctx, paths)
+}
+
+// RemoveFile removes rel (slash-separated) inside profileDir and then the
+// directories that became empty, up to but excluding the first path element.
+func (s *Store) RemoveFile(_ context.Context, profileDir, rel string) error {
+	full := filepath.Join(profileDir, filepath.FromSlash(rel))
+	if info, err := os.Lstat(full); err == nil && info.IsDir() {
+		return fmt.Errorf("%s is a directory, not a file", full)
+	}
+	if err := os.Remove(full); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+
+	top := filepath.Join(profileDir, strings.SplitN(filepath.FromSlash(rel), string(filepath.Separator), 2)[0])
+	for dir := filepath.Dir(full); dir != top && strings.HasPrefix(dir, top+string(filepath.Separator)); dir = filepath.Dir(dir) {
+		if err := os.Remove(dir); err != nil {
+			break // not empty (or gone): the directory has other content
+		}
+	}
+	return nil
 }
 
 // fileManifest is the JSON document of a manifest. Primitive types only.
@@ -145,6 +188,12 @@ type fileManifest struct {
 	Version int         `json:"version"`
 	Profile string      `json:"profile"`
 	Files   []fileOwned `json:"files"`
+	Blocks  []fileBlock `json:"blocks,omitempty"`
+}
+
+type fileBlock struct {
+	Path   string `json:"path"`
+	SHA256 string `json:"sha256"`
 }
 
 type fileOwned struct {
@@ -157,6 +206,9 @@ func toFileManifest(profile profilename.Name, m syncbus.Manifest) fileManifest {
 	fm := fileManifest{Version: manifestVersion, Profile: profile.String(), Files: []fileOwned{}}
 	for _, f := range m.Files {
 		fm.Files = append(fm.Files, fileOwned{Path: f.Path})
+	}
+	for _, b := range m.Blocks {
+		fm.Blocks = append(fm.Blocks, fileBlock{Path: b.Path, SHA256: b.Sum})
 	}
 	return fm
 }
@@ -179,27 +231,206 @@ func (s *Store) SaveManifest(_ context.Context, profile profilename.Name, m sync
 	return err
 }
 
-// FileExists reports whether rel (slash-separated) exists inside profileDir.
-// A symbolic link counts as existing, even a dangling one.
-func (s *Store) FileExists(_ context.Context, profileDir, rel string) (bool, error) {
-	_, err := os.Lstat(filepath.Join(profileDir, filepath.FromSlash(rel)))
+// QueryEntry reads what is at rel (slash-separated) inside profileDir. A
+// symbolic link is reported as such, not followed.
+func (s *Store) QueryEntry(_ context.Context, profileDir, rel string) (syncbus.Entry, error) {
+	full := filepath.Join(profileDir, filepath.FromSlash(rel))
+	info, err := os.Lstat(full)
 	switch {
-	case err == nil:
-		return true, nil
 	case os.IsNotExist(err):
-		return false, nil
+		return syncbus.Entry{Kind: syncbus.Missing}, nil
+	case err != nil:
+		return syncbus.Entry{}, err
+	}
+
+	switch {
+	case info.Mode().IsRegular():
+		data, err := os.ReadFile(full)
+		if err != nil {
+			return syncbus.Entry{}, err
+		}
+		return syncbus.Entry{Kind: syncbus.RegularFile, Files: []syncbus.File{{Mode: info.Mode().Perm(), Data: data}}}, nil
+	case info.IsDir():
+		files, err := readTree(full)
+		if err != nil {
+			return syncbus.Entry{}, err
+		}
+		return syncbus.Entry{Kind: syncbus.Directory, Files: files}, nil
+	case info.Mode()&fs.ModeSymlink != 0:
+		target, err := os.Readlink(full)
+		if err != nil {
+			return syncbus.Entry{}, err
+		}
+		return syncbus.Entry{Kind: syncbus.Symlink, Target: target}, nil
 	default:
-		return false, err
+		return syncbus.Entry{Kind: syncbus.Other}, nil
 	}
 }
 
-// toBusManifest converts the manifest document into the business type.
-func toBusManifest(fm fileManifest) syncbus.Manifest {
+// readTree reads everything below dir for showing and comparing: files with
+// their content, symbolic links with their target. Other special files are
+// left out.
+func readTree(dir string) ([]syncbus.File, error) {
+	var files []syncbus.File
+	err := filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			return nil
+		}
+		rel, err := filepath.Rel(dir, p)
+		if err != nil {
+			return err
+		}
+		f := syncbus.File{Path: filepath.ToSlash(rel)}
+		switch {
+		case d.Type()&fs.ModeSymlink != 0:
+			target, err := os.Readlink(p)
+			if err != nil {
+				return err
+			}
+			f.Mode, f.Data = fs.ModeSymlink|0o777, []byte(target)
+		case d.Type().IsRegular():
+			info, err := d.Info()
+			if err != nil {
+				return err
+			}
+			if f.Data, err = os.ReadFile(p); err != nil {
+				return err
+			}
+			f.Mode = info.Mode().Perm()
+		default:
+			return nil
+		}
+		files = append(files, f)
+		return nil
+	})
+	return files, err
+}
+
+// SaveBackup copies src to <baton dir>/backups/<profile>/<stamp>/<rel>.
+func (s *Store) SaveBackup(_ context.Context, profile profilename.Name, stamp, src, rel string) (string, error) {
+	dst := filepath.Join(s.batonDir, "backups", profile.String(), stamp, filepath.FromSlash(rel))
+	if err := copyTree(src, dst); err != nil {
+		return "", err
+	}
+	return dst, nil
+}
+
+// QueryShared reads rel (slash-separated) inside profileDir and follows a
+// symbolic link at rel to the file behind it.
+func (s *Store) QueryShared(_ context.Context, profileDir, rel string) (syncbus.SharedFile, error) {
+	full := filepath.Join(profileDir, filepath.FromSlash(rel))
+	info, err := os.Lstat(full)
+	switch {
+	case os.IsNotExist(err):
+		return syncbus.SharedFile{Path: full}, nil
+	case err != nil:
+		return syncbus.SharedFile{}, err
+	}
+
+	file := syncbus.SharedFile{Exists: true, Path: full}
+	if info.Mode()&fs.ModeSymlink != 0 {
+		if file.Path, err = filepath.EvalSymlinks(full); err != nil {
+			return syncbus.SharedFile{}, fmt.Errorf("%s: %w", full, err)
+		}
+		file.Linked = true
+		if info, err = os.Stat(file.Path); err != nil {
+			return syncbus.SharedFile{}, err
+		}
+	}
+	if !info.Mode().IsRegular() {
+		return syncbus.SharedFile{}, fmt.Errorf("%s is not a regular file", full)
+	}
+	file.Mode = info.Mode().Perm()
+	if file.Data, err = os.ReadFile(file.Path); err != nil {
+		return syncbus.SharedFile{}, err
+	}
+	return file, nil
+}
+
+// copyFile copies the content of src into a new file dst; it fails if dst
+// exists.
+func copyFile(src, dst string, perm fs.FileMode) (err error) {
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = in.Close() }()
+
+	out, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_EXCL, perm)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if closeErr := out.Close(); err == nil {
+			err = closeErr
+		}
+	}()
+	_, err = io.Copy(out, in)
+	return err
+}
+
+// copyTree copies a file, a symbolic link (as a link) or a directory. It
+// refuses to overwrite anything, so a backup never replaces an older one.
+func copyTree(src, dst string) error {
+	info, err := os.Lstat(src)
+	if err != nil {
+		return err
+	}
+	switch {
+	case info.IsDir():
+		if err := os.MkdirAll(dst, 0o700); err != nil {
+			return err
+		}
+		entries, err := os.ReadDir(src)
+		if err != nil {
+			return err
+		}
+		for _, e := range entries {
+			if err := copyTree(filepath.Join(src, e.Name()), filepath.Join(dst, e.Name())); err != nil {
+				return err
+			}
+		}
+		return nil
+	case info.Mode()&fs.ModeSymlink != 0:
+		target, err := os.Readlink(src)
+		if err != nil {
+			return err
+		}
+		if err := os.MkdirAll(filepath.Dir(dst), 0o700); err != nil {
+			return err
+		}
+		return os.Symlink(target, dst)
+	case info.Mode().IsRegular():
+		if err := os.MkdirAll(filepath.Dir(dst), 0o700); err != nil {
+			return err
+		}
+		return copyFile(src, dst, info.Mode().Perm()|0o600)
+	default:
+		return nil // sockets and devices have nothing to back up
+	}
+}
+
+// toBusManifest converts the manifest document into the business type. Every
+// path must stay inside the Profile: sync deletes what the manifest lists, so
+// a damaged manifest must not point it elsewhere.
+func toBusManifest(fm fileManifest) (syncbus.Manifest, error) {
 	var m syncbus.Manifest
 	for _, f := range fm.Files {
+		if !filepath.IsLocal(f.Path) || path.Clean(f.Path) != f.Path {
+			return syncbus.Manifest{}, fmt.Errorf("path %q is not a clean relative path inside the Profile", f.Path)
+		}
 		m.Files = append(m.Files, syncbus.OwnedFile{Path: f.Path})
 	}
-	return m
+	for _, b := range fm.Blocks {
+		if !filepath.IsLocal(b.Path) || path.Clean(b.Path) != b.Path {
+			return syncbus.Manifest{}, fmt.Errorf("path %q is not a clean relative path inside the Profile", b.Path)
+		}
+		m.Blocks = append(m.Blocks, syncbus.OwnedBlock{Path: b.Path, Sum: b.SHA256})
+	}
+	return m, nil
 }
 
 // QueryManifest reads ~/.baton/manifests/<profile>.json. A missing file is an
@@ -220,5 +451,9 @@ func (s *Store) QueryManifest(_ context.Context, profile profilename.Name) (sync
 	if fm.Version != manifestVersion {
 		return syncbus.Manifest{}, fmt.Errorf("%s: unsupported manifest version %d", s.manifestPath(profile), fm.Version)
 	}
-	return toBusManifest(fm), nil
+	m, err := toBusManifest(fm)
+	if err != nil {
+		return syncbus.Manifest{}, fmt.Errorf("%s: %w", s.manifestPath(profile), err)
+	}
+	return m, nil
 }

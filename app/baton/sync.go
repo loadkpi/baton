@@ -19,7 +19,7 @@ func runSync(ctx context.Context, c console, home string) int {
 		return c.errorf("%v", err)
 	}
 
-	res, err := syncbus.New(syncfile.New(filepath.Join(home, ".baton"))).Sync(ctx, cfg)
+	res, err := syncbus.New(syncfile.New(filepath.Join(home, ".baton")), newConfirmer(c)).Sync(ctx, cfg)
 	if err != nil {
 		return c.errorf("%v", err)
 	}
@@ -33,11 +33,15 @@ func runSync(ctx context.Context, c console, home string) int {
 	return exitOK
 }
 
-// toAppSyncLines formats a sync result as one output line per Profile.
+// toAppSyncLines formats a sync result as one output line per Profile, and one
+// per backup.
 func toAppSyncLines(res syncbus.Result) []string {
 	lines := make([]string, 0, len(res.Profiles))
 	for _, p := range res.Profiles {
-		lines = append(lines, fmt.Sprintf("%s: %d files written, %d unchanged", p.Name, p.Written, p.Unchanged))
+		for _, b := range p.Backups {
+			lines = append(lines, fmt.Sprintf("%s: backed up %s to %s", p.Name, b.Path, b.Copy))
+		}
+		lines = append(lines, fmt.Sprintf("%s: %d files written, %d removed, %d unchanged", p.Name, p.Written, p.Removed, p.Unchanged))
 	}
 	return lines
 }

@@ -1,14 +1,17 @@
 // Package syncbus renders the user's source repository into Profiles.
+//
+// Sync owns only what it created. It records every file in a manifest and
+// updates or deletes only those. Where it would have to change something it
+// does not own, it shows the difference, asks, and backs the thing up first.
+// It never writes a file that git tracks.
 package syncbus
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io/fs"
-	"path"
-	"path/filepath"
-	"sort"
-	"strings"
+	"time"
 
 	"github.com/loadkpi/baton/business/domain/configbus"
 	"github.com/loadkpi/baton/business/types/profilename"
@@ -29,9 +32,13 @@ type File struct {
 	Data []byte
 }
 
-// SourceSkills is what the source repository holds.
-type SourceSkills struct {
-	Skills []Skill
+// Source is what the source repository holds: the instructions and the skills.
+type Source struct {
+	// Instructions is the content of the source's AGENTS.md; HasInstructions
+	// is false when there is none (or it is empty).
+	Instructions    string
+	HasInstructions bool
+	Skills          []Skill
 	// Skipped are names of directories under skills/ that are not skills
 	// because they have no SKILL.md.
 	Skipped []string
@@ -42,6 +49,8 @@ type Manifest struct {
 	// Files are the files sync wrote, as slash-separated paths relative to
 	// the Profile directory, sorted.
 	Files []OwnedFile
+	// Blocks are the blocks of shared Markdown files that sync owns.
+	Blocks []OwnedBlock
 }
 
 // OwnedFile is a file in a Profile that sync created.
@@ -49,44 +58,142 @@ type OwnedFile struct {
 	Path string
 }
 
+// OwnedBlock is the block of Baton in a shared Markdown file (for example
+// CLAUDE.md): the part between the markers, and nothing else in the file.
+type OwnedBlock struct {
+	// Path is relative to the Profile directory, slash-separated.
+	Path string
+	// Sum is the SHA-256 (hex) of the body sync last wrote. A different
+	// body in the file means someone edited the block by hand.
+	Sum string
+}
+
+// SharedFile is a file that belongs to someone else and holds a part of
+// Baton. If the path is a symbolic link, it is resolved, so the file behind it
+// is the one that is read and changed.
+type SharedFile struct {
+	Exists bool
+	// Path is the absolute path of the file itself, links resolved.
+	Path   string
+	Linked bool
+	Mode   fs.FileMode
+	Data   []byte
+}
+
+// EntryKind says what exists at a path of a Profile.
+type EntryKind int
+
+// The kinds of Entry.
+const (
+	// Missing means nothing is there.
+	Missing EntryKind = iota
+	// RegularFile is a file; Entry.Files holds it, with an empty Path.
+	RegularFile
+	// Directory is a directory; Entry.Files holds every file below it.
+	Directory
+	// Symlink is a symbolic link; Entry.Target is where it points.
+	Symlink
+	// Other is anything else (a socket, a device).
+	Other
+)
+
+// Entry is what exists at a path of a Profile, with its content.
+type Entry struct {
+	Kind EntryKind
+	// Files are the files of a RegularFile (one, with an empty Path) or a
+	// Directory (all below it, sorted, relative to it). A symbolic link
+	// inside a directory is a File with fs.ModeSymlink in its Mode and its
+	// target as Data.
+	Files  []File
+	Target string
+}
+
 // Storer is the file storage sync works with: the source repository, the
-// Profile directories and the manifests.
+// Profile directories, the manifests and the backups.
 type Storer interface {
 	// QueryManifest returns the manifest of a Profile; a Profile that was
 	// never synced has an empty one.
 	QueryManifest(ctx context.Context, profile profilename.Name) (Manifest, error)
-	// FileExists reports whether rel (slash-separated) exists inside a
-	// Profile directory, as a file, directory or anything else.
-	FileExists(ctx context.Context, profileDir, rel string) (bool, error)
-	// CheckProfileDir fails unless dir is an existing directory.
-	CheckProfileDir(ctx context.Context, dir string) error
-	// QuerySkills reads the skills of the source repository. A source without
-	// a skills directory has no skills; it is an error if source itself is
-	// not a directory.
-	QuerySkills(ctx context.Context, source string) (SourceSkills, error)
 	// SaveManifest replaces the manifest of a Profile unless it is identical.
 	SaveManifest(ctx context.Context, profile profilename.Name, m Manifest) error
+	// QueryEntry reads what exists at rel (slash-separated) inside a Profile
+	// directory. It does not follow a symbolic link at rel.
+	QueryEntry(ctx context.Context, profileDir, rel string) (Entry, error)
+	// CheckProfileDir fails unless dir is an existing directory.
+	CheckProfileDir(ctx context.Context, dir string) error
+	// QuerySource reads the instructions and the skills of the source
+	// repository. A source without a skills directory has no skills; it is an
+	// error if source itself is not a directory.
+	QuerySource(ctx context.Context, source string) (Source, error)
+	// QueryShared reads the file at rel (slash-separated) inside a Profile
+	// directory, following a symbolic link at rel.
+	QueryShared(ctx context.Context, profileDir, rel string) (SharedFile, error)
+	// QueryTracked returns those of the absolute paths that git tracks.
+	QueryTracked(ctx context.Context, paths []string) ([]string, error)
+	// SaveBackup copies src (an absolute path: a file, a directory or a
+	// symbolic link) to the backups of the Profile, to rel inside the
+	// directory named stamp. It returns where the copy is and never
+	// overwrites one.
+	SaveBackup(ctx context.Context, profile profilename.Name, stamp, src, rel string) (string, error)
 	// WriteFile writes a file inside a Profile directory (rel is
-	// slash-separated) unless it already has exactly this content and mode.
-	// It reports whether it wrote.
-	WriteFile(ctx context.Context, profileDir, rel string, data []byte, mode fs.FileMode) (bool, error)
+	// slash-separated) atomically.
+	WriteFile(ctx context.Context, profileDir, rel string, data []byte, mode fs.FileMode) error
+	// RemoveFile removes a file inside a Profile directory (rel is
+	// slash-separated), then the directories it leaves empty, but never the
+	// first path element ("skills"). A file that is already gone is fine.
+	RemoveFile(ctx context.Context, profileDir, rel string) error
+	// RemoveAll removes whatever is at rel inside a Profile directory: a
+	// directory with everything in it, or a symbolic link itself, never what
+	// it points to.
+	RemoveAll(ctx context.Context, profileDir, rel string) error
+}
+
+// Question is what sync asks the user before it changes something it does not
+// own.
+type Question struct {
+	Profile string
+	// Path is the absolute path that would change.
+	Path string
+	// Diff shows what would change, in unified diff format.
+	Diff string
+}
+
+// ErrNoTerminal is returned by a Confirmer that has no terminal to ask in.
+var ErrNoTerminal = errors.New("no terminal to ask in")
+
+// Confirmer asks the user a Question.
+type Confirmer interface {
+	// Confirm reports whether the user agreed to the change. It returns
+	// ErrNoTerminal when it cannot ask.
+	Confirm(ctx context.Context, q Question) (bool, error)
 }
 
 // Bus is the sync domain.
 type Bus struct {
-	storer Storer
+	storer    Storer
+	confirmer Confirmer
+	now       func() time.Time
 }
 
-// New creates the sync domain over a storage.
-func New(storer Storer) *Bus {
-	return &Bus{storer: storer}
+// New creates the sync domain over a storage and a way to ask the user.
+func New(storer Storer, confirmer Confirmer) *Bus {
+	return &Bus{storer: storer, confirmer: confirmer, now: time.Now}
+}
+
+// Backup is a copy sync made of something before it changed it.
+type Backup struct {
+	// Path is what was copied; Copy is where the copy is.
+	Path string
+	Copy string
 }
 
 // ProfileResult is what sync did to one Profile.
 type ProfileResult struct {
 	Name      profilename.Name
 	Written   int
+	Removed   int
 	Unchanged int
+	Backups   []Backup
 }
 
 // Result is what one sync run did.
@@ -96,21 +203,10 @@ type Result struct {
 	Warnings []string
 }
 
-// profilePlan is what sync is about to do to one Profile.
-type profilePlan struct {
-	profile  configbus.Profile
-	manifest Manifest
-	writes   []plannedWrite
-}
-
-type plannedWrite struct {
-	rel  string
-	file File
-}
-
 // Sync renders the source repository named in cfg into every Profile of cfg.
-// It first checks everything and plans all Profiles; it writes only when no
-// Profile has a problem.
+// It first checks everything, plans all Profiles, refuses to touch tracked
+// files and asks every question; it writes only when no Profile has a problem
+// and every question was answered yes.
 func (b *Bus) Sync(ctx context.Context, cfg configbus.Config) (Result, error) {
 	for _, p := range cfg.Profiles {
 		if err := b.storer.CheckProfileDir(ctx, p.Dir); err != nil {
@@ -118,7 +214,7 @@ func (b *Bus) Sync(ctx context.Context, cfg configbus.Config) (Result, error) {
 		}
 	}
 
-	source, err := b.storer.QuerySkills(ctx, cfg.Source)
+	source, err := b.storer.QuerySource(ctx, cfg.Source)
 	if err != nil {
 		return Result{}, fmt.Errorf("read source: %w", err)
 	}
@@ -129,90 +225,28 @@ func (b *Bus) Sync(ctx context.Context, cfg configbus.Config) (Result, error) {
 	}
 
 	plans := make([]profilePlan, 0, len(cfg.Profiles))
-	var conflicts []string
 	for _, p := range cfg.Profiles {
-		plan, profileConflicts, err := b.plan(ctx, p, source.Skills)
+		plan, err := b.plan(ctx, p, source)
 		if err != nil {
 			return Result{}, fmt.Errorf("profile %s: %w", p.Name, err)
 		}
-		conflicts = append(conflicts, profileConflicts...)
 		plans = append(plans, plan)
 	}
-	if len(conflicts) > 0 {
-		return Result{}, fmt.Errorf("refusing to overwrite files that Baton did not create: %s", strings.Join(conflicts, ", "))
+
+	if err := b.checkTracked(ctx, plans); err != nil {
+		return Result{}, err
+	}
+	if err := b.askAll(ctx, plans); err != nil {
+		return Result{}, err
 	}
 
+	stamp := b.now().UTC().Format("20060102T150405.000Z")
 	for _, plan := range plans {
-		pr, err := b.apply(ctx, plan)
+		pr, err := b.apply(ctx, plan, stamp)
 		if err != nil {
 			return Result{}, fmt.Errorf("profile %s: %w", plan.profile.Name, err)
 		}
 		res.Profiles = append(res.Profiles, pr)
 	}
 	return res, nil
-}
-
-// plan decides what to write into one Profile and which existing files are in
-// the way: files that exist but are not in the Profile's manifest.
-func (b *Bus) plan(ctx context.Context, p configbus.Profile, skills []Skill) (profilePlan, []string, error) {
-	previous, err := b.storer.QueryManifest(ctx, p.Name)
-	if err != nil {
-		return profilePlan{}, nil, err
-	}
-	owned := make(map[string]bool, len(previous.Files))
-	for _, f := range previous.Files {
-		owned[f.Path] = true
-	}
-
-	plan := profilePlan{profile: p}
-	var conflicts []string
-	for _, s := range skills {
-		for _, f := range s.Files {
-			rel := path.Join("skills", s.Name, f.Path)
-			plan.writes = append(plan.writes, plannedWrite{rel: rel, file: f})
-			if owned[rel] {
-				continue
-			}
-			exists, err := b.storer.FileExists(ctx, p.Dir, rel)
-			if err != nil {
-				return profilePlan{}, nil, err
-			}
-			if exists {
-				conflicts = append(conflicts, filepath.Join(p.Dir, filepath.FromSlash(rel)))
-			}
-			owned[rel] = true
-		}
-	}
-
-	// Ownership is never forgotten here: files recorded earlier stay in the
-	// manifest even when the source no longer has them.
-	for rel := range owned {
-		plan.manifest.Files = append(plan.manifest.Files, OwnedFile{Path: rel})
-	}
-	sort.Slice(plan.manifest.Files, func(i, j int) bool { return plan.manifest.Files[i].Path < plan.manifest.Files[j].Path })
-	return plan, conflicts, nil
-}
-
-// apply writes the manifest, then the files.
-func (b *Bus) apply(ctx context.Context, plan profilePlan) (ProfileResult, error) {
-	pr := ProfileResult{Name: plan.profile.Name}
-
-	// The manifest goes first: if sync dies half-way, every file it may have
-	// written is already recorded as owned.
-	if err := b.storer.SaveManifest(ctx, plan.profile.Name, plan.manifest); err != nil {
-		return ProfileResult{}, err
-	}
-
-	for _, w := range plan.writes {
-		wrote, err := b.storer.WriteFile(ctx, plan.profile.Dir, w.rel, w.file.Data, w.file.Mode)
-		if err != nil {
-			return ProfileResult{}, err
-		}
-		if wrote {
-			pr.Written++
-		} else {
-			pr.Unchanged++
-		}
-	}
-	return pr, nil
 }

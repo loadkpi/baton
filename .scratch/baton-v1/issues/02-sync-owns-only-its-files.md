@@ -6,13 +6,14 @@
 
 **Status:** ready-for-agent
 
-- [ ] Changing a skill in the source updates it in the Profile on the next sync.
-- [ ] Removing a skill from the source removes it from the Profile on the next sync, and from the manifest.
-- [ ] Files and directories not in the manifest are never modified or deleted, except through the question below.
+- [x] Changing a skill in the source updates it in the Profile on the next sync.
+- [x] Removing a skill from the source removes it from the Profile on the next sync, and from the manifest.
+- [x] Files and directories not in the manifest are never modified or deleted, except through the question below.
 - [ ] Sync can own a part of a shared file: a block between `<!-- baton:begin -->` and `<!-- baton:end -->` in Markdown, named keys in JSON and TOML. The manifest records which part it owns.
-- [ ] The first change to a shared file shows the diff and asks; on yes the file is copied to `~/.baton/backups/<profile>/<ts>/` and written atomically (temp file and rename), and everything outside Baton's part stays byte-for-byte the same; on no, sync stops with an error naming the path.
-- [ ] Later syncs update Baton's part without asking; if Baton's part was edited by hand, sync asks again.
-- [ ] A foreign skill directory with the same name as a source skill gets the same question and backup before it is replaced.
-- [ ] Without a terminal to ask in, sync stops with an error naming the path, and nothing is written.
-- [ ] Sync never writes a file that git tracks, even when a Profile lives inside a git repository.
-- [ ] Answers are tested through a pseudo-terminal; the stop is tested with stdin that is not a terminal.
+  - Markdown block: done. JSON and TOML keys: not built in this ticket, because nothing in sync produces keys and the only test seam is the `baton` executable; tickets 04 and 05 add them with their first use (see `DESIGN.md` D4, "Not built here").
+- [x] The first change to a shared file shows the diff and asks; on yes the file is copied to `~/.baton/backups/<profile>/<ts>/` and written atomically (temp file and rename), and everything outside Baton's part stays byte-for-byte the same; on no, sync stops with an error naming the path.
+- [x] Later syncs update Baton's part without asking; if Baton's part was edited by hand, sync asks again.
+- [x] A foreign skill directory with the same name as a source skill gets the same question and backup before it is replaced.
+- [x] Without a terminal to ask in, sync stops with an error naming the path, and nothing is written.
+- [x] Sync never writes a file that git tracks, even when a Profile lives inside a git repository.
+- [x] Answers are tested through a pseudo-terminal; the stop is tested with stdin that is not a terminal.

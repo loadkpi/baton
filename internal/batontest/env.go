@@ -198,6 +198,24 @@ func (e *Env) Exists(path string) bool {
 	return err == nil
 }
 
+// ListDir returns the sorted names of the entries of a directory; the path is
+// absolute or relative to HOME. A missing directory fails the test.
+func (e *Env) ListDir(path string) []string {
+	e.t.Helper()
+	if !filepath.IsAbs(path) {
+		path = e.Path(path)
+	}
+	entries, err := os.ReadDir(path)
+	if err != nil {
+		e.t.Fatal(err)
+	}
+	names := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		names = append(names, entry.Name())
+	}
+	return names
+}
+
 // SourceFile writes a file into the source repository and returns nothing;
 // rel is relative to SourceDir. Call CommitSource to record it in git.
 func (e *Env) SourceFile(rel, content string, executable ...bool) {

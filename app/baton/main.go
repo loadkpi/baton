@@ -16,12 +16,13 @@ const (
 )
 
 func main() {
-	os.Exit(run(context.Background(), os.Args[1:], os.Stdout, os.Stderr))
+	os.Exit(run(context.Background(), os.Args[1:], os.Stdin, os.Stdout, os.Stderr))
 }
 
 // console is where a command writes. Write errors on a closed terminal or pipe
 // are not actionable, so the helpers ignore them.
 type console struct {
+	stdin  io.Reader
 	stdout io.Writer
 	stderr io.Writer
 }
@@ -47,8 +48,8 @@ func (c console) usagef(format string, a ...any) int {
 }
 
 // run executes one command line and returns the process exit code.
-func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
-	c := console{stdout: stdout, stderr: stderr}
+func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer) int {
+	c := console{stdin: stdin, stdout: stdout, stderr: stderr}
 	if len(args) == 0 {
 		return c.usagef("a command is required (available: sync)")
 	}
