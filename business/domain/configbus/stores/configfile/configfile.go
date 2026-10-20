@@ -31,8 +31,9 @@ func New(path, home string) *Store {
 
 // fileConfig is the TOML document. Primitive types only.
 type fileConfig struct {
-	Source   string                 `toml:"source"`
-	Profiles map[string]fileProfile `toml:"profiles"`
+	Source         string                 `toml:"source"`
+	DefaultProfile string                 `toml:"default_profile"`
+	Profiles       map[string]fileProfile `toml:"profiles"`
 }
 
 type fileProfile struct {
@@ -90,6 +91,16 @@ func toBusConfig(fc fileConfig, home string) (configbus.Config, error) {
 			return configbus.Config{}, err
 		}
 		cfg.Profiles = append(cfg.Profiles, p)
+	}
+	if fc.DefaultProfile != "" {
+		name, err := profilename.Parse(fc.DefaultProfile)
+		if err != nil {
+			return configbus.Config{}, fmt.Errorf("default_profile: %w", err)
+		}
+		if _, ok := fc.Profiles[fc.DefaultProfile]; !ok {
+			return configbus.Config{}, fmt.Errorf("default_profile %q is not a configured profile", fc.DefaultProfile)
+		}
+		cfg.DefaultProfile = name
 	}
 	return cfg, nil
 }

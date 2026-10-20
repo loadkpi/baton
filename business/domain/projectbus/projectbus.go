@@ -103,6 +103,24 @@ func (b *Bus) Resolve(ctx context.Context, dir string) (p Project, ok bool, err 
 	return p, true, nil
 }
 
+// Named returns the registered Project with the name.
+func (b *Bus) Named(ctx context.Context, ref string) (Project, error) {
+	name, err := projectname.Parse(ref)
+	if err != nil {
+		return Project{}, err
+	}
+	known, err := b.storer.QueryAll(ctx)
+	if err != nil {
+		return Project{}, err
+	}
+	for _, p := range known {
+		if p.Name == name {
+			return p, nil
+		}
+	}
+	return Project{}, fmt.Errorf("unknown project %q; pass the path of a git repository to register it", ref)
+}
+
 func byPath(projects []Project, path string) (Project, bool) {
 	for _, p := range projects {
 		if p.Path == path {

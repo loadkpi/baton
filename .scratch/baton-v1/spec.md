@@ -185,7 +185,7 @@ A single Go binary, `baton`, with no stateful Daemon. All state lives in files u
 
 **Terminal**
 
-- `baton new` opens a Guake tab (`guake -n`, `-r` title, `-e` command) that runs the Agent directly. Static title. No tab switching from notifications. The Terminal is a replaceable part so tmux can be plugged in after the experiment.
+- `baton new` opens a Guake tab with one call, `guake -e '<line>' -r '<title>'`, where the line is `cd <project path> && <command>` (`-e` opens a new tab in Guake's default directory and types the line into it, `-r` titles the current tab, and `-n` is ignored when `-e` is given; Guake 3.10 source: `main.py`, `dbusiface.py` `execute_command`, `notebook.py` `new_page_with_focus`; see `DESIGN.md` D8). The tab runs the Agent directly. Static title. No tab switching from notifications. The Terminal is a replaceable part so tmux can be plugged in after the experiment.
 
 ## Testing Decisions
 

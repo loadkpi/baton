@@ -231,6 +231,8 @@ dir   = "~/.claude-personal"            # the Agent's config directory
 tags  = ["personal"]                    # optional: the tags this Profile accepts (ticket 03)
 ```
 
+A top-level `default_profile = "claude-personal"` (before the first table) names the Profile `baton new` uses when `--profile` is not given (ticket 06); it must be a configured Profile.
+
 - `source`, `agent` and `dir` are required. Paths are absolute or start with `~/`; anything else is an error. At least one Profile is required.
 - A Profile name matches `[a-z0-9][a-z0-9._-]*`, because Baton uses it as a file name (manifests, backups).
 - Unknown keys are errors, so a misspelled key is never silently ignored.
@@ -392,9 +394,27 @@ The Event files are the archive. v1 stores raw Events as JSONL with mode 0600, w
 
 ### D8. Terminal: Guake now, tmux as an experiment
 
-`baton new` opens a Guake tab (`guake -n … -r <project>/<task>:<agent> -e <command>`) that runs the Agent directly. The tab title is static; live status is in `baton ls` and notifications. Clicking a notification does not switch tabs: Guake addresses tabs by index, which shifts as tabs close.
+`baton new` opens a Guake tab that runs the Agent directly. The tab title is static; live status is in `baton ls` and notifications. Clicking a notification does not switch tabs: Guake addresses tabs by index, which shifts as tabs close.
 
 tmux is not installed today. It is tried for a week inside Guake with an "invisible" config (`mouse on`, `status off`, large `history-limit`). The Terminal is a replaceable part of `baton new`: "the tab runs the command directly" or "the tab attaches to tmux". tmux, or `dtach`/`abduco`, becomes necessary only for the v2 web terminal.
+
+#### Guake and `baton new` (ticket 06)
+
+**What `guake -n NEW_TAB` and `-e` mean.** Checked Oct 20, 2026 against `guake --help` of the installed Guake 3.10 (the only Guake command run, because a real Guake is running here) and against the raw source of the `3.10` tag (`guake/main.py`, `dbusiface.py`, `guake_app.py`, `notebook.py`, downloaded and read; Guake itself was not driven):
+
+- `-n NEW_TAB` is "Add a new tab (with current directory set to NEW_TAB)": the argument is the **working directory** of the new tab (`main.py`: `if options.new_tab and not options.command: remote_object.add_tab(options.new_tab)`). It is **ignored when `-e` is given**.
+- `-e COMMAND` **opens a new tab** and types the command into it, as `--help` says ("Execute an arbitrary command in a new tab"): `dbusiface.py`, `execute_command` calls `self.guake.add_tab()` and then `self.guake.execute_command(command)`, which does `terminal.feed_child(command + "\n")` on the current terminal (`guake_app.py`, `execute_command`). The new tab starts in Guake's default directory, not the caller's, and the line is run by the tab's own interactive shell; the tab stays open when the command ends. An earlier reading of this section, that `-e` types into the current tab, was wrong.
+- `-r TITLE` renames the **current** tab and runs after `-e` in `main()` (`main.py`: the `options.command` branch comes before the `options.rename_current_tab` branch). `add_tab` makes the new tab current: `guake_app.py` `add_tab` calls `notebook.py` `new_page_with_focus`, which calls `self.set_current_page(page_num)`. The rename comes in through D-Bus with `user_set=True` (`dbusiface.py` `rename_current_tab`), so `rename_page` marks the label as custom and the shell's own title changes (`on_terminal_title_changed`) do not override it.
+- So Baton makes **one call**: `guake -e '<line>' -r '<title>'`, with `<line>` = `cd <quoted project path> && env -u ... claude`. The `cd` is needed because `-n` cannot be combined with `-e`. One call also leaves no window for a race between a tab call and a command call.
+- Still [unverified], since no Guake was driven: that the installed 3.10 binary behaves like the tag's source (the version was matched by number, not by checksum); what happens when Guake is not running (`guake` starts it, per its help, but the first call may then be lost); that the command typed while the new tab's shell is still starting is not lost (it is written to the pty, so the shell should read it when it is ready); that `-e` raises the window (`--show` is not passed).
+
+**The environment of the tab.** The command is typed into a shell that Guake's server process started, so the environment of the tab is the server's, never `baton new`'s, and an `unset` in `baton new` would change nothing. The line therefore clears the variables itself with `env(1)`: `env -u ANTHROPIC_API_KEY -u OPENAI_API_KEY [-u CLAUDE_CONFIG_DIR | CLAUDE_CONFIG_DIR=<dir>] claude`. Tests type this line into `sh` with the keys set and read the environment a `claude` stub receives. Only `ANTHROPIC_API_KEY` and `OPENAI_API_KEY` are cleared; whether Codex or Claude read other billing variables (`CODEX_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, ...) is [unverified] and is revisited with Codex in ticket 09. The line is quoted for a POSIX shell (single quotes); if the tab's shell is fish or another non-POSIX shell, a Profile directory with unusual characters may be read differently [unverified]. The line also ends up in the shell history.
+
+**Profile of a host Session.** `--profile <name>` chooses a configured Claude Profile; without it `default_profile` of the config (a top-level key naming a Profile table, checked at load) is used; without that, the only Claude Profile; with several and no default `baton new` refuses and lists them. A Profile whose directory is `~/.claude` gets `-u CLAUDE_CONFIG_DIR` (the Agent then uses `~/.claude`, even if Guake's server has the variable); every other Profile gets `CLAUDE_CONFIG_DIR=<dir>`. That Claude Code reads its Profile from `CLAUDE_CONFIG_DIR` is the premise of the whole Profile design; it was not run here.
+
+**`baton new <project> [task] --agent <agent> [--profile <name>]`.** Flags may stand anywhere. `<project>` is a registered Project name, or a path (it contains `/`, or is `.` or `..`) inside a git repository, which registers the Project when it is not known (the same registration as the readers of D1/D2). The tab opens in the Project's path, its git root. A name Baton does not know is refused. A Project whose default Runtime is not `host` is refused with a message until the sandbox Runtime arrives (ticket 09); there is no `--runtime` flag yet. `--agent` is required; only `claude` is supported until ticket 10. The optional Task name is validated like a Project name and used **only for the title**, `<project>/<task>:<agent>`, or `<project>:<agent>` without it; Tasks, `current.jsonl` and the unnamed Task `<project>/<date>-<n>` are ticket 07, which also owns the title of a Session without a name.
+
+**Code layout.** `business/domain/launchbus` decides what to run (`host.go` is the one place that knows how an Agent starts on the host: the environment, the Profile, the title; ticket 08 moves it behind the Runtime interface) and talks to a `Terminal` interface with one method, `OpenTab(Tab{Dir, Title, Command []string})`. `launchbus/stores/launchguake` is the Guake implementation (the one call, the `cd` and the quoting, `foundation/shellquote`). A tmux Terminal would implement the same method.
 
 ## Risks
 
@@ -446,7 +466,7 @@ Four stages; each is usable on its own.
 ## Open questions
 
 - [ ] Does `codex` accept an initial prompt as a positional argument in interactive mode? Needed for D5. [unverified]
-- [ ] What does the `NEW_TAB` argument of `guake -n` mean exactly (working directory or something else)? Needed for D8. [unverified]
+- [x] What does the `NEW_TAB` argument of `guake -n` mean exactly? The working directory of the new tab, and `-n` does nothing when `-e` is given (D8, ticket 06). Guake itself was not driven, so how it behaves live is still [unverified].
 - [ ] Is the hook's parent process the Agent or a `sh -c` wrapper? Ticket 05 finds the Agent by walking up the chain, so it works either way, and records when it had to fall back to the direct parent (`agent_pid_fallback`). The question stays open until the chain is recorded under a live Agent. [unverified]
 - [ ] Do Codex hook payloads use the same field names as Claude's (`session_id`, `hook_event_name`, `cwd`)? [unverified]
 - [ ] Do `PostToolUse` payloads of both Agents carry the command's exit code? Needed for the automatic part of a Handoff (D5). [unverified]
