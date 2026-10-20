@@ -5,9 +5,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
+	"strings"
 
 	"github.com/BurntSushi/toml"
 
@@ -16,6 +20,7 @@ import (
 	"github.com/loadkpi/baton/business/types/profilename"
 	"github.com/loadkpi/baton/business/types/projectname"
 	"github.com/loadkpi/baton/business/types/tag"
+	"github.com/loadkpi/baton/foundation/secretsenv"
 )
 
 // Store reads the configuration file at a path.
@@ -23,6 +28,9 @@ type Store struct {
 	path string
 	home string
 }
+
+// secretsRel is where the secrets file lives, relative to home.
+const secretsRel = ".config/baton/secrets.env"
 
 // New creates a store for the configuration file at path. Paths inside the
 // file may start with "~", which stands for home.
@@ -36,6 +44,15 @@ type fileConfig struct {
 	DefaultProfile string                 `toml:"default_profile"`
 	Profiles       map[string]fileProfile `toml:"profiles"`
 	Projects       map[string]fileProject `toml:"projects"`
+	Telegram       *fileTelegram          `toml:"telegram"`
+}
+
+// fileTelegram is the [telegram] table. chat_id is a number or a string, so
+// it is decoded as it comes.
+type fileTelegram struct {
+	APIURL   string `toml:"api_url"`
+	TokenVar string `toml:"token_var"`
+	ChatID   any    `toml:"chat_id"`
 }
 
 type fileProject struct {
@@ -69,6 +86,16 @@ func (s *Store) Query(_ context.Context) (configbus.Config, error) {
 		return configbus.Config{}, fmt.Errorf("%s: %w", s.path, err)
 	}
 	return cfg, nil
+}
+
+// QuerySecret reads one variable of the secrets file.
+func (s *Store) QuerySecret(_ context.Context, name string) (string, bool, error) {
+	values, err := secretsenv.Read(filepath.Join(s.home, secretsRel))
+	if err != nil {
+		return "", false, err
+	}
+	v, ok := values[name]
+	return v, ok, nil
 }
 
 // toBusConfig converts the file document into the validated business type.
@@ -110,6 +137,13 @@ func toBusConfig(fc fileConfig, home string) (configbus.Config, error) {
 		}
 		cfg.Projects = append(cfg.Projects, p)
 	}
+	if fc.Telegram != nil {
+		t, err := toBusTelegram(*fc.Telegram)
+		if err != nil {
+			return configbus.Config{}, fmt.Errorf("telegram: %w", err)
+		}
+		cfg.Telegram = &t
+	}
 	if fc.DefaultProfile != "" {
 		name, err := profilename.Parse(fc.DefaultProfile)
 		if err != nil {
@@ -121,6 +155,61 @@ func toBusConfig(fc fileConfig, home string) (configbus.Config, error) {
 		cfg.DefaultProfile = name
 	}
 	return cfg, nil
+}
+
+// defaultAPIURL is the Bot API of Telegram.
+const defaultAPIURL = "https://api.telegram.org"
+
+func toBusTelegram(ft fileTelegram) (configbus.Telegram, error) {
+	t := configbus.Telegram{APIURL: defaultAPIURL}
+	if ft.APIURL != "" {
+		u, err := parseAPIURL(ft.APIURL)
+		if err != nil {
+			return configbus.Telegram{}, err
+		}
+		t.APIURL = u
+	}
+	// A bot token pasted here would be a secret in a file that may be
+	// committed, so the value is never echoed back.
+	if !secretsenv.ValidName(ft.TokenVar) {
+		return configbus.Telegram{}, errors.New("token_var is required and must be the NAME of a variable in secrets.env (the token itself goes there, not here)")
+	}
+	t.TokenVar = ft.TokenVar
+	switch id := ft.ChatID.(type) {
+	case int64:
+		t.ChatID = strconv.FormatInt(id, 10)
+	case string:
+		t.ChatID = id
+	}
+	if t.ChatID == "" {
+		return configbus.Telegram{}, errors.New("chat_id is required (a number, or an @name in a string)")
+	}
+	return t, nil
+}
+
+// parseAPIURL accepts an https URL, or an http one for this machine only, so
+// that the bot token, which is part of every request path, cannot be sent in
+// the clear over a network.
+func parseAPIURL(raw string) (string, error) {
+	u, err := url.Parse(raw)
+	if err != nil || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
+		return "", errors.New("api_url must be a URL like https://api.telegram.org")
+	}
+	switch {
+	case u.Scheme == "https":
+	case u.Scheme == "http" && isLoopback(u.Hostname()):
+	default:
+		return "", errors.New("api_url must use https (http is accepted only for localhost)")
+	}
+	return strings.TrimRight(u.String(), "/"), nil
+}
+
+func isLoopback(host string) bool {
+	if host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 func toBusProjectSettings(name string, fp fileProject) (configbus.ProjectSettings, error) {

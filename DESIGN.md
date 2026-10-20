@@ -101,8 +101,9 @@ flowchart LR
 ```
 ~/.config/baton/
   config.toml                 # source repository path, host Profiles (and their tags, ticket 03)
-  secrets.env                 # values for ${VAR} placeholders, mode 0600
+  secrets.env                 # values for ${VAR} placeholders and the Telegram bot token, mode 0600
 ~/.baton/
+  away                        # exists while `baton away` is in force (ticket 13)
   bin/baton                   # mounted read-only into sandboxes
   manifests/<profile>.json    # per Profile: files sync created, its blocks/keys in shared files
   backups/<profile>/<ts>/     # copies of shared files taken before sync first changed them
@@ -538,7 +539,7 @@ Collecting failed tests (first draft D5) is dropped for v1: parsing test output 
 
 The channel is the desktop (`notify-send`) by default. `baton away` switches to Telegram until `baton back`. Without a stateful Daemon, "no keyboard activity for N minutes" is not reliable, so the switch is explicit.
 
-Notifications are sent by `baton watch` on the host, never by hooks: the sandbox has neither `notify-send` nor your desktop D-Bus, and mounting the D-Bus socket would give the container control over desktop apps. As a side effect the Telegram token never enters a sandbox. Telegram messages carry only the status and the Task name, never command output.
+Notifications are sent by `baton watch` on the host, never by hooks: the sandbox has neither `notify-send` nor your desktop D-Bus, and mounting the D-Bus socket would give the container control over desktop apps. As a side effect the Telegram token never enters a sandbox. Telegram messages carry only the status and the Task name, never command output. How Telegram is configured and what happens when it fails: [Telegram while away](#telegram-while-away-ticket-13).
 
 **What `baton watch` remembers.** In v1, nothing on disk. At start it reads the current statuses and sends nothing; afterwards it notifies only transitions it sees itself. `lost` has no Event, so it polls every few seconds: the recorded `agent_pid`/`agent_start` of host Sessions, and one `docker ps` per tick for sandbox Sessions. Whatever happens while `baton watch` is down is not notified. In v2 a cursor file (offset per Event file and the last notified status) lets it notify, after a restart, what is still true, for example a Session that is still `waiting_approval`.
 
@@ -559,6 +560,35 @@ Decided while building it. Everything above stays as written; this fills in what
 **`baton watch install`.** Writes `~/.config/systemd/user/baton-watch.service` (`$XDG_CONFIG_HOME` is not consulted, like `~/.config/baton`), then runs `systemctl --user daemon-reload` and `systemctl --user enable --now baton-watch.service`, with `systemctl` found on `PATH`; the unit is kept if `systemctl` fails and the failing call is reported. Running it again rewrites the same file and enables again. The unit starts `%h/.baton/bin/baton watch` (where `make install` puts the binary and where the hooks call it; `baton watch install` warns if the file is not there yet) with `Restart=on-failure`, `RestartSec=5` and `WantedBy=default.target`. `%h` in `ExecStart=` was checked with `systemd-analyze verify` (systemd 255, system mode, a copy of the file outside the user's directories): it expands to the home directory. Not checked: `enable --now` under a real user manager, and that the service starts at login [unverified]. There is no `uninstall`; `systemctl --user disable --now baton-watch.service` and removing the file do it.
 
 **Tests.** `baton watch` runs as a process of the test (`env.Start`, killed in `t.Cleanup`), Events are written after the `watching` line with chosen `ts`, and the `notify-send` and `systemctl` stubs record the calls. "Nothing was sent" is shown without sleeping: a Session in a second Project asks for approval with a `ts` older than all others, so that it is told last in its look, and when its notification is there everything that look had to tell is there too.
+
+#### Telegram while away (ticket 13)
+
+Decided while building it. D6 and the `baton watch` section stay as written.
+
+**Config and secret.** A top-level table of `config.toml`, next to the others; unknown keys are errors like everywhere else:
+
+```toml
+[telegram]
+token_var = "TELEGRAM_TOKEN"   # required: the NAME of the variable in secrets.env that holds the bot token
+chat_id   = 123456789          # required: a number (negative for groups), or a string such as "@my_channel"
+api_url   = "https://api.telegram.org"   # optional: the Bot API base URL, this is the default
+```
+
+The token is a secret, so it lives in `~/.config/baton/secrets.env` (mode 0600, read by the same code as the MCP secrets: `foundation/secretsenv`, a group- or world-readable file is refused) and the config only names the variable, which is how `${VAR}` in `mcp.json` works too. A token pasted into `token_var` is refused, and the error does not repeat the value. The chat id is not a secret and stays in the config. `api_url` exists so that tests point Baton at a local server (spec, Testing Decisions). It must be `https`, or `http` for `localhost` or a loopback address, because the token is part of every request path and must not cross a network in the clear.
+
+**`baton away` / `baton back`.** `away` creates `~/.baton/away` (mode 0600, the time as its content; only the existence counts), `back` removes it; both are idempotent. `baton watch` asks for the state for every message it sends, so a change applies to a running watcher on its next tick, with no restart and no signal. `away` refuses (exit 1, nothing written) when the config has no `[telegram]` table or the secrets file does not set the variable, because going away into silence is worse than staying at the desk. It does not send a test message. Whether the chat id is right or the bot may write to that chat is not checked until the first message.
+
+**Away routes to Telegram only; the desktop is the fallback.** Story 45 says "route notifications to Telegram until `baton back`", and the ticket says "instead of the desktop", so while away a message goes to Telegram and not to `notify-send`. If Telegram fails (settings unreadable, no connection, any HTTP status other than 200), the same message goes to the desktop instead: it costs nothing, the notification waits in the desktop's list for when you are back, and a lost approval request is the one thing this feature must not allow. The two channels are not used at once: the point of `away` is that the desktop stays quiet while nobody is there.
+
+**One warning per kind.** The router (`watchbus.Router`, the only `Notifier` the watcher has) warns on standard error the first time a kind of failure is seen (`settings`, `connection`, `http <status>`, the away state itself) and then stays quiet about that kind, however many messages follow, until a message gets through (or the user is back), which resets it. A different kind warns again. The text is `baton: warning: cannot notify: telegram: <reason>; notifying on the desktop instead`.
+
+**The request.** `POST <api_url>/bot<token>/sendMessage`, JSON `{"chat_id": <number or "@name">, "text": "<summary>\n<body>"}` with no `parse_mode` (plain text, nothing in a Task name can be read as markup), for example `Baton: waiting for approval` / `my-app/fix-login (claude)`: the same two strings as the desktop notification, so status, Task name and Agent and nothing from a payload or a command (story 46). Standard library `net/http` only, a 10 s limit, redirects are not followed (a redirect would carry the token to wherever it points). Nothing is ever read from Telegram: no `getUpdates`, no webhook, so what anyone writes to the bot has no effect (two-way Telegram is v2).
+
+**The token never appears.** Go's `url.Error` carries the full URL, token included, so the transport error is unwrapped to its reason (`send: dial tcp 127.0.0.1:...: connection refused`), and every error text that leaves the package also has the token removed (plain and URL-escaped) in case a description echoes it. A test forces a connection error and a description that echoes the token and checks standard output and error. The token is not in `ps` (it is in no argument), not in the Event files and not in the away file.
+
+**Sandboxes.** The watcher runs on the host and is the only reader of the token. `baton sync` renders secrets only into the MCP servers a Profile accepts, so the token reaches a Profile only if the user writes `${TELEGRAM_TOKEN}` into an `mcp.json` server by hand; hooks do not need it. A test syncs a sandbox Project with Telegram configured, starts a Session in it and searches the sandbox home, the sandbox directory, the Project's mounted directory and the `docker run` arguments for the token. `~/.baton/away` and `~/.config/baton` are not among the mounts.
+
+**Verified and not.** The shape of the request was checked against the official [Bot API page](https://core.telegram.org/bots/api) (read Oct 20, 2026, by the lead): requests go to `https://api.telegram.org/bot<token>/METHOD_NAME`, POST with `application/json` is supported, every response has a Boolean `ok` and an optional `description`, and `sendMessage` takes `chat_id` (Integer or String, `@username` for channels) and `text` (1-4096 characters). No real Telegram was contacted; the tests use a fake server that accepts that shape. Not checked: that a non-200 answer is always an error (the Bot API documents `ok: false` with an error code), message length limits (a message is two short lines), and rate limits (a 429 is a failure of kind `http 429` and the message goes to the desktop).
 
 ### D7. Event archive
 

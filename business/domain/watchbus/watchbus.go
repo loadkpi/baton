@@ -32,6 +32,31 @@ type Message struct {
 	Task string
 }
 
+// Summary is the title of the notification. It never starts with a dash, so
+// notify-send cannot take it for an option.
+func (m Message) Summary() string {
+	switch m.Status {
+	case status.WaitingApproval:
+		return "Baton: waiting for approval"
+	case status.WaitingInput:
+		return "Baton: waiting for input"
+	case status.Lost:
+		return "Baton: session lost"
+	default:
+		return "Baton: " + m.Status.String()
+	}
+}
+
+// Body names the Task and the Agent. A Task name or a project name never
+// starts with a dash, and a Session outside git is described without one, so
+// the body cannot be taken for an option either.
+func (m Message) Body() string {
+	if m.Task == "" {
+		return m.Agent.String() + " (outside git)"
+	}
+	return m.Task + " (" + m.Agent.String() + ")"
+}
+
 // Notifier shows a Message to the user.
 type Notifier interface {
 	Notify(ctx context.Context, m Message) error

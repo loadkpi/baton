@@ -3,6 +3,7 @@ package configbus
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -25,6 +26,29 @@ type Config struct {
 	Profiles []Profile
 	// Projects are the per-Project settings, in the order of the names.
 	Projects []ProjectSettings
+	// Telegram is where `baton watch` sends notifications while the user is
+	// away. Nil means the config has no [telegram] table.
+	Telegram *Telegram
+}
+
+// Telegram is the [telegram] table of the config. It holds no secret: the bot
+// token is named by TokenVar and lives in the secrets file.
+type Telegram struct {
+	// APIURL is the base URL of the Bot API, without a trailing slash.
+	APIURL string
+	// TokenVar is the name of the variable in the secrets file that holds the
+	// bot token.
+	TokenVar string
+	// ChatID is the chat that receives the messages: a number, or an @name.
+	ChatID string
+}
+
+// TelegramSettings are the Telegram settings with the bot token resolved from
+// the secrets file. The token is a secret: never print it.
+type TelegramSettings struct {
+	APIURL string
+	ChatID string
+	Token  string
 }
 
 // ProjectSettings are the settings of one Project in the config.
@@ -101,6 +125,9 @@ func joinNames(profiles []Profile) string {
 // Storer reads the configuration from its storage.
 type Storer interface {
 	Query(ctx context.Context) (Config, error)
+	// QuerySecret returns the value of a variable of the secrets file, and
+	// whether it is set there.
+	QuerySecret(ctx context.Context, name string) (value string, ok bool, err error)
 }
 
 // Bus is the configuration domain.
@@ -120,4 +147,25 @@ func (b *Bus) Load(ctx context.Context) (Config, error) {
 		return Config{}, fmt.Errorf("load config: %w", err)
 	}
 	return cfg, nil
+}
+
+// TelegramSettings returns the Telegram settings with the token. It fails,
+// without printing any secret, when the config has no [telegram] table or the
+// secrets file does not set the variable the table names.
+func (b *Bus) TelegramSettings(ctx context.Context) (TelegramSettings, error) {
+	cfg, err := b.Load(ctx)
+	if err != nil {
+		return TelegramSettings{}, err
+	}
+	if cfg.Telegram == nil {
+		return TelegramSettings{}, errors.New("telegram is not configured; add a [telegram] table to the config (see DESIGN.md, \"Telegram while away\")")
+	}
+	token, ok, err := b.storer.QuerySecret(ctx, cfg.Telegram.TokenVar)
+	if err != nil {
+		return TelegramSettings{}, fmt.Errorf("telegram: %w", err)
+	}
+	if !ok || token == "" {
+		return TelegramSettings{}, fmt.Errorf("telegram: %s is not set in the secrets file", cfg.Telegram.TokenVar)
+	}
+	return TelegramSettings{APIURL: cfg.Telegram.APIURL, ChatID: cfg.Telegram.ChatID, Token: token}, nil
 }

@@ -28,10 +28,16 @@ type proc struct {
 // file at path (relative to HOME), the way a hook would have written it.
 func writeProcEvent(t *testing.T, env *batontest.Env, path, rt, profile, sessionID, ts, event, cwd string, p proc) {
 	t.Helper()
+	writeProcEventPayload(t, env, path, rt, profile, sessionID, ts, event, cwd, p, map[string]any{})
+}
+
+// writeProcEventPayload is writeProcEvent with the payload the Agent sent.
+func writeProcEventPayload(t *testing.T, env *batontest.Env, path, rt, profile, sessionID, ts, event, cwd string, p proc, payload map[string]any) {
+	t.Helper()
 	doc := map[string]any{
 		"v": 1, "ts": ts, "agent": "claude", "profile": profile, "runtime": rt,
 		"host": p.host, "agent_pid": p.pid, "agent_start": p.start, "session_id": sessionID,
-		"event": event, "cwd": cwd, "payload": map[string]any{},
+		"event": event, "cwd": cwd, "payload": payload,
 	}
 	if p.fallback {
 		doc["agent_pid_fallback"] = true

@@ -4,10 +4,10 @@
 
 **Blocked by:** 12
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] After `baton away`, notifications go to Telegram instead of the desktop; after `baton back`, to the desktop again.
-- [ ] The Telegram bot token and chat id live in Baton's local config and secrets on the host and never reach a sandbox.
-- [ ] Messages contain only status, Task name and Agent; never command output or Event payloads.
-- [ ] Sending is one-way; incoming Telegram messages are ignored.
-- [ ] Tested against a local fake Telegram HTTP server configured by URL.
+- [x] After `baton away`, notifications go to Telegram instead of the desktop; after `baton back`, to the desktop again.
+- [x] The Telegram bot token and chat id live in Baton's local config and secrets on the host and never reach a sandbox.
+- [x] Messages contain only status, Task name and Agent; never command output or Event payloads.
+- [x] Sending is one-way; incoming Telegram messages are ignored.
+- [x] Tested against a local fake Telegram HTTP server configured by URL.

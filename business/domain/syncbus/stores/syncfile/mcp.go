@@ -7,12 +7,11 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
 	"sort"
-	"strings"
 
 	"github.com/loadkpi/baton/business/domain/syncbus"
 	"github.com/loadkpi/baton/business/types/tag"
+	"github.com/loadkpi/baton/foundation/secretsenv"
 )
 
 // fileMCP is the JSON document of the source's mcp.json. Primitive types only.
@@ -91,44 +90,9 @@ func toBusMCPServer(name string, doc map[string]any) (syncbus.MCPServer, error) 
 
 // QuerySecrets reads the secrets file: NAME=value lines.
 func (s *Store) QuerySecrets(_ context.Context) (syncbus.Secrets, error) {
-	secrets := syncbus.Secrets{Path: s.secretsPath, Values: map[string]string{}}
-	info, err := os.Stat(s.secretsPath)
-	if os.IsNotExist(err) {
-		return secrets, nil
-	}
+	values, err := secretsenv.Read(s.secretsPath)
 	if err != nil {
 		return syncbus.Secrets{}, err
 	}
-	if info.Mode().Perm()&0o077 != 0 {
-		return syncbus.Secrets{}, fmt.Errorf("%s is accessible by others (mode %04o); run: chmod 600 %s", s.secretsPath, info.Mode().Perm(), s.secretsPath)
-	}
-	data, err := os.ReadFile(s.secretsPath)
-	if err != nil {
-		return syncbus.Secrets{}, err
-	}
-	for i, line := range strings.Split(string(data), "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
-		name, value, ok := strings.Cut(line, "=")
-		name = strings.TrimSpace(name)
-		if !ok || !variableName.MatchString(name) {
-			// The line is not quoted: it may be a secret.
-			return syncbus.Secrets{}, fmt.Errorf("%s:%d: expected NAME=value", s.secretsPath, i+1)
-		}
-		secrets.Values[name] = unquote(strings.TrimSpace(value))
-	}
-	return secrets, nil
-}
-
-var variableName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
-
-// unquote removes one pair of matching single or double quotes around a value.
-// There are no escapes: what is between the quotes is the value.
-func unquote(v string) string {
-	if len(v) >= 2 && (v[0] == '"' || v[0] == '\'') && v[len(v)-1] == v[0] {
-		return v[1 : len(v)-1]
-	}
-	return v
+	return syncbus.Secrets{Path: s.secretsPath, Values: values}, nil
 }
