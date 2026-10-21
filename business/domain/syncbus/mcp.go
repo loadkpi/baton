@@ -143,15 +143,15 @@ func hasPlaceholder(v any) bool {
 	return false
 }
 
-// staleServers are the servers recorded in the manifest that the Profile no
-// longer receives.
-func staleServers(previous Manifest, rel string, wanted mcpServers) []OwnedKey {
+// staleServers are the servers recorded in the manifest, under the key top of
+// the file at rel, that the Profile no longer receives.
+func staleServers(previous Manifest, rel, top string, wanted func(name string) bool) []OwnedKey {
 	var stale []OwnedKey
 	for _, k := range previous.Keys {
-		if k.Path != rel || len(k.Key) != 2 || k.Key[0] != "mcpServers" {
+		if k.Path != rel || len(k.Key) != 2 || k.Key[0] != top {
 			continue
 		}
-		if _, ok := wanted.values[k.Key[1]]; !ok {
+		if !wanted(k.Key[1]) {
 			stale = append(stale, k)
 		}
 	}
@@ -159,15 +159,18 @@ func staleServers(previous Manifest, rel string, wanted mcpServers) []OwnedKey {
 }
 
 // planMCP plans the servers of the source in the Profile's MCP configuration.
-// The file is shared and its rules are those of planJSONKeys; the keys are the
+// The file is shared and its rules are those of planKeys; the keys are the
 // named servers under mcpServers.
 func (b *Bus) planMCP(ctx context.Context, plan *profilePlan, previous Manifest, source Source, secrets Secrets, owned, wantedFiles map[string]bool, res *Result) error {
 	wanted, err := serversFor(plan.profile, source, secrets)
 	if err != nil {
 		return err
 	}
-	if plan.layout.mcp == fragmentMCP {
+	switch plan.layout.mcp {
+	case fragmentMCP:
 		return b.planMCPFragment(ctx, plan, wanted, owned, wantedFiles, res)
+	case tablesForm:
+		return b.planMCPTables(ctx, plan, previous, wanted, secrets, res)
 	}
 	rel := mcpRel(plan.profile.Dir, plan.home)
 
@@ -175,12 +178,12 @@ func (b *Bus) planMCP(ctx context.Context, plan *profilePlan, previous Manifest,
 	for _, name := range wanted.names {
 		keys = append(keys, wantedKey{Key: []string{"mcpServers", name}, Value: wanted.values[name], Template: wanted.templates[name]})
 	}
-	return b.planJSONKeys(ctx, plan, previous, jsonTarget{
+	return b.planKeys(ctx, plan, previous, keysTarget{
 		rel:        rel,
 		backupRel:  mcpFile, // must stay inside the backup directory
 		name:       mcpFile,
 		wanted:     keys,
-		stale:      staleServers(previous, rel, wanted),
+		stale:      staleServers(previous, rel, "mcpServers", func(name string) bool { _, ok := wanted.values[name]; return ok }),
 		mode:       0o600, // it holds secrets
 		hasSecrets: wanted.hasSecrets,
 		hidden:     secrets.Values,
@@ -229,8 +232,14 @@ func hide(text string, secrets map[string]string) string {
 		if value == "" {
 			continue
 		}
+		// As JSON writes it with and without escaping <, > and &: the
+		// questions of a JSON file show the second, and those of a TOML file
+		// show the value as TOML writes a string, which is close to it.
 		quoted, _ := json.Marshal(value)
 		entries = append(entries, entry{name, string(quoted[1 : len(quoted)-1])})
+		if plain := string(compactJSON(value)); plain != string(quoted) {
+			entries = append(entries, entry{name, plain[1 : len(plain)-1]})
+		}
 	}
 	sort.Slice(entries, func(i, j int) bool { return len(entries[i].escaped) > len(entries[j].escaped) })
 	for _, e := range entries {

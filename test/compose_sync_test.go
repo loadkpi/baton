@@ -593,7 +593,6 @@ func TestComposeConfig_MistakesStopBatonWithAMessageNamingTheKey(t *testing.T) {
 		{"no files", "[projects.x.compose]\nservice = \"s\"\n[projects.x.compose.profiles.c]\nagent = \"claude\"\ndir = \"/c\"\n", "projects.x.compose: files is required"},
 		{"no profiles", "[projects.x.compose]\nfiles = [\"c.yml\"]\nservice = \"s\"\n", "projects.x.compose: no Profiles"},
 		{"relative dir", "[projects.x.compose]\nfiles = [\"c.yml\"]\nservice = \"s\"\n[projects.x.compose.profiles.c]\nagent = \"claude\"\ndir = \"rel/.claude\"\n", "profile x.c: dir \"rel/.claude\" must be an absolute path in the container"},
-		{"codex", "[projects.x.compose]\nfiles = [\"c.yml\"]\nservice = \"s\"\n[projects.x.compose.profiles.c]\nagent = \"codex\"\ndir = \"/c\"\n", "profile x.c: agent \"codex\" is not supported in a compose container yet"},
 		{"shared without project", "[profiles.s]\nruntime = \"compose\"\nagent = \"claude\"\ndir = \"/c\"\n", "profile s: project is required"},
 		{"shared with unknown project", "[profiles.s]\nruntime = \"compose\"\nproject = \"nope\"\nagent = \"claude\"\ndir = \"/c\"\n", "project \"nope\" has no [projects.nope.compose] table"},
 		{"project on a host profile", "[profiles.h]\nproject = \"x\"\nagent = \"claude\"\ndir = \"/c\"\n", "profile h: project applies only to runtime"},

@@ -37,19 +37,7 @@ func (b *Bus) planMCPFragment(ctx context.Context, plan *profilePlan, servers mc
 // servers; a server of another kind is left out with a warning. The result is
 // nil when no server is left.
 func codexMCPFragment(servers mcpServers) (data []byte, warnings []string, err error) {
-	tables := make(map[string]any, len(servers.names))
-	for _, name := range servers.names {
-		spec, _ := servers.values[name].(map[string]any)
-		table, why := toCodexServer(spec)
-		if why != "" {
-			warnings = append(warnings, fmt.Sprintf("mcp.json: server %q %s; it is not written for Codex", name, why))
-			continue
-		}
-		tables[name] = table
-		for _, key := range unusedKeys(spec) {
-			warnings = append(warnings, fmt.Sprintf("mcp.json: server %q: %q has no Codex equivalent and is left out", name, key))
-		}
-	}
+	tables, warnings := codexServers(servers.names, servers.values, true)
 	if len(tables) == 0 {
 		return nil, warnings, nil
 	}
@@ -65,6 +53,31 @@ func codexMCPFragment(servers mcpServers) (data []byte, warnings []string, err e
 	// forbids, so only the tables of the servers are kept.
 	body := strings.TrimPrefix(buf.String(), "[mcp_servers]\n")
 	return []byte("# Written by baton sync. Do not edit.\n" + body), warnings, nil
+}
+
+// codexServers converts the named servers of mcp.json (Claude's shape, in
+// specs) into the tables Codex reads, by name. A server that Codex cannot run
+// is left out, and members it has no equivalent for are dropped; both are
+// warnings when warn is set (the same servers are converted twice, with and
+// without their secrets, and the second time says nothing).
+func codexServers(names []string, specs map[string]any, warn bool) (tables map[string]any, warnings []string) {
+	tables = make(map[string]any, len(names))
+	for _, name := range names {
+		spec, _ := specs[name].(map[string]any)
+		table, why := toCodexServer(spec)
+		if why != "" {
+			warnings = append(warnings, fmt.Sprintf("mcp.json: server %q %s; it is not written for Codex", name, why))
+			continue
+		}
+		tables[name] = table
+		for _, key := range unusedKeys(spec) {
+			warnings = append(warnings, fmt.Sprintf("mcp.json: server %q: %q has no Codex equivalent and is left out", name, key))
+		}
+	}
+	if !warn {
+		warnings = nil
+	}
+	return tables, warnings
 }
 
 // codexKeys are the members of a server of mcp.json that have a Codex

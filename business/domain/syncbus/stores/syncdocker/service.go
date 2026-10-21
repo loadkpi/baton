@@ -101,6 +101,34 @@ func (s *Service) Home(ctx context.Context) (string, error) {
 	return s.home, nil
 }
 
+// CodexHome is the directory Codex keeps its files in inside the container:
+// CODEX_HOME of the container's environment, else .codex in the HOME of its
+// user. The directory itself may be a link into a volume; Profile.Check
+// follows it. A CODEX_HOME that is not an absolute path is returned as it is,
+// for Check to refuse.
+func (s *Service) CodexHome(ctx context.Context) (string, error) {
+	if err := s.open(ctx); err != nil {
+		return "", err
+	}
+	var value string
+	if s.box.Running {
+		var err error
+		if value, err = s.compose.Getenv(ctx, "CODEX_HOME"); err != nil {
+			return "", s.errorf("read CODEX_HOME in the container: %w", err)
+		}
+	} else {
+		for _, kv := range s.box.Env {
+			if v, ok := strings.CutPrefix(kv, "CODEX_HOME="); ok {
+				value = v
+			}
+		}
+	}
+	if value == "" {
+		return path.Join(s.home, ".codex"), nil
+	}
+	return value, nil
+}
+
 // homeOfStopped finds HOME of a container that is not running: the
 // environment it was created with, else the passwd entry of its user.
 func (s *Service) homeOfStopped(ctx context.Context) (string, error) {

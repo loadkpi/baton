@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"os/exec"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -50,6 +51,18 @@ func (c Compose) ContainerIDs(ctx context.Context) ([]string, error) {
 func (c Compose) Exec(ctx context.Context, stdin io.Reader, argv ...string) ([]byte, error) {
 	args := append(c.base(), "exec", "-T", c.Service)
 	return c.Client.exec(ctx, streamTimeout, stdin, append(args, argv...)...)
+}
+
+var envName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+
+// Getenv returns the value of an environment variable of the running service,
+// as a process started in it sees it; empty when the variable is not set.
+func (c Compose) Getenv(ctx context.Context, name string) (string, error) {
+	if !envName.MatchString(name) {
+		return "", fmt.Errorf("%q is not the name of an environment variable", name)
+	}
+	out, err := c.Exec(ctx, nil, "sh", "-c", `printf %s "$`+name+`"`)
+	return string(out), err
 }
 
 // Up runs `docker compose up -d <service>`: it creates the service's container

@@ -74,7 +74,8 @@ type ComposeSettings struct {
 	// Profiles are the Profiles inside the container, in the order of their
 	// names: the Project's own and those of a volume it hosts for others. A
 	// Profile's Dir is a path in the container: absolute, or "~" / "~/..." for
-	// the container user's HOME, which only the container knows.
+	// the container user's HOME, which only the container knows. A Codex
+	// Profile's Dir may be empty: the service's CODEX_HOME, else ~/.codex.
 	Profiles []Profile
 }
 

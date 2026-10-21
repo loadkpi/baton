@@ -71,16 +71,22 @@ type Target struct {
 	Isolated bool
 }
 
+// CodexSkillsRel is where the user skills of Codex are, in the manifest and
+// in the paths a Profile's files are asked for: $HOME/.agents/skills. In a
+// sandbox it sits next to the Profile directory ($HOME/.codex), which is what
+// the path says; a Profile whose directory is somewhere else (CODEX_HOME in a
+// container) maps the prefix to its HOME.
+const CodexSkillsRel = "../.agents/skills"
+
 // ContentTop is the directory of rel that is never removed with the files
 // below it: the first path element ("skills", "config.d"), or
 // ../.agents/skills for the skills of Codex, which sit next to the Profile
 // directory.
 func ContentTop(rel string) string {
-	parts := strings.Split(rel, "/")
-	if parts[0] == ".." && len(parts) > 3 {
-		return strings.Join(parts[:3], "/")
+	if rest, ok := strings.CutPrefix(rel, CodexSkillsRel+"/"); ok && rest != "" {
+		return CodexSkillsRel
 	}
-	return parts[0]
+	return strings.Split(rel, "/")[0]
 }
 
 // layout is where an Agent keeps what sync writes, and in which form.
@@ -88,6 +94,9 @@ type layout struct {
 	// skillsRel is the directory of user skills, relative to the Profile
 	// directory.
 	skillsRel string
+	// instructionsRel is the Profile's instructions file (CLAUDE.md,
+	// AGENTS.md), for the layouts that keep a marked block in it.
+	instructionsRel string
 	// stripSkillTags removes Baton's `tags` key from the front matter of the
 	// copies of SKILL.md.
 	stripSkillTags bool
@@ -118,6 +127,9 @@ const (
 	// fragmentMCP is a TOML file of Baton's in config.d, which is merged into
 	// a config that something else regenerates.
 	fragmentMCP
+	// tablesForm are named tables in the Agent's shared TOML configuration
+	// (Codex's config.toml), edited without touching the rest.
+	tablesForm
 )
 
 // Locations of Baton's fragments inside a Codex Profile in a sandbox.
@@ -130,12 +142,17 @@ const (
 func layoutOf(t Target) (layout, error) {
 	switch {
 	case t.Profile.Agent == agent.Claude:
-		return layout{skillsRel: "skills", instructions: blockForm, mcp: keysForm, hooksFile: settingsFile}, nil
+		return layout{skillsRel: "skills", instructionsRel: instructionsFile, instructions: blockForm, mcp: keysForm, hooksFile: settingsFile}, nil
 	case t.Profile.Agent == agent.Codex && t.Runtime == runtime.Sandbox:
 		// ai-sandbox regenerates config.toml and AGENTS.md on every run, so
 		// Baton writes fragments for them. The skills directory and hooks.json
 		// are not regenerated (checked against run.sh, see DESIGN.md).
-		return layout{skillsRel: "../.agents/skills", stripSkillTags: true, instructions: fragmentForm, mcp: fragmentMCP, hooksFile: codexHooksFile}, nil
+		return layout{skillsRel: CodexSkillsRel, stripSkillTags: true, instructions: fragmentForm, mcp: fragmentMCP, hooksFile: codexHooksFile}, nil
+	case t.Profile.Agent == agent.Codex && t.Runtime == runtime.Compose:
+		// Nothing regenerates the files of a Profile in a Compose container,
+		// so Codex's own files are edited in place: a marked block in
+		// AGENTS.md, tables in config.toml, hooks in hooks.json.
+		return layout{skillsRel: CodexSkillsRel, instructionsRel: codexInstructionsFile, stripSkillTags: true, instructions: blockForm, mcp: tablesForm, hooksFile: codexHooksFile}, nil
 	default:
 		return layout{}, fmt.Errorf("%s Profiles in the %s Runtime are not supported", t.Profile.Agent, t.Runtime)
 	}

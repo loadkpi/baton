@@ -75,7 +75,7 @@ func hookGroup(command string) map[string]any {
 //
 // hooks.<Event> is an array the user's own hooks live in, so Baton owns one
 // element of it, the group with its command, and never anything else. The
-// rules of the shared file are those of planJSONKeys.
+// rules of the shared file are those of planKeys.
 func (b *Bus) planHooks(ctx context.Context, plan *profilePlan, previous Manifest) error {
 	file := plan.layout.hooksFile
 	command := hookCommand(plan.binary, plan.profile.Agent, plan.profile.Name.String(), plan.runtime)
@@ -102,7 +102,7 @@ func (b *Bus) planHooks(ctx context.Context, plan *profilePlan, previous Manifes
 	// running do not have them.
 	plan.hooksFirst = plan.hooks && !ownsAnyIn(previous, file)
 
-	return b.planJSONKeys(ctx, plan, previous, jsonTarget{
+	return b.planKeys(ctx, plan, previous, keysTarget{
 		rel:       file,
 		backupRel: file,
 		name:      file,

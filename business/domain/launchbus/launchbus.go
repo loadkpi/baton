@@ -78,7 +78,7 @@ func (b *Bus) Check(r Request) error {
 // Project, from the user's choice (the zero value for none): a host Profile on
 // the host, one of the Project's Profiles in its Compose service, and the zero
 // Profile for a sandbox, whose Profiles are its own. It refuses what cannot
-// run: Codex on the host or in Compose, and a choice of Profile in a sandbox.
+// run: Codex on the host, and a choice of Profile in a sandbox.
 func SelectProfile(cfg configbus.Config, project projectbus.Project, a agent.Agent, chosen profilename.Name) (configbus.Profile, error) {
 	switch {
 	case project.Runtime == runtime.Compose:
@@ -94,13 +94,10 @@ func SelectProfile(cfg configbus.Config, project projectbus.Project, a agent.Age
 	return configbus.Profile{}, nil
 }
 
-// selectComposeProfile picks among the Claude Profiles inside the Project's
+// selectComposeProfile picks among the Profiles of the Agent inside the Project's
 // service: the chosen one, else the only one. The config's default_profile is
 // a host Profile and does not apply.
 func selectComposeProfile(cfg configbus.Config, project projectbus.Project, a agent.Agent, chosen profilename.Name) (configbus.Profile, error) {
-	if a != agent.Claude {
-		return configbus.Profile{}, fmt.Errorf("project %s runs in the %s Runtime; %s does not run in a compose container yet (ticket 19), only claude does", project.Name, project.Runtime, a)
-	}
 	settings := cfg.ComposeOf(project.Name)
 	if settings == nil {
 		return configbus.Profile{}, fmt.Errorf("project %s runs in the %s Runtime but the config has no [projects.%s.compose] table", project.Name, project.Runtime, project.Name)
@@ -166,15 +163,21 @@ func (b *Bus) Start(ctx context.Context, r Request) error {
 	// how `baton ls` can tell. Claude needs no such thing: its hooks run once
 	// sync wrote them.
 	if r.Agent == agent.Codex {
-		return b.recordLaunch(ctx, began, project.Name, project.Runtime, task.Label(), tab.Title, r.Agent)
+		return b.recordLaunch(ctx, began, project.Name, project.Runtime, r.Profile, task.Label(), tab.Title, r.Agent)
 	}
 	return nil
 }
 
-func (b *Bus) recordLaunch(ctx context.Context, at time.Time, project projectname.Name, rt runtime.Runtime, task, title string, a agent.Agent) error {
-	profile, err := profilename.Sandbox(project, a)
-	if err != nil {
-		return fmt.Errorf("name the %s Profile of project %s: %w", a, project, err)
+// recordLaunch remembers a launch under the Profile the Session was started
+// with: the chosen one of a Compose service, or, for a sandbox, whose Profiles
+// are not in the config, <project>.<agent>.
+func (b *Bus) recordLaunch(ctx context.Context, at time.Time, project projectname.Name, rt runtime.Runtime, chosen configbus.Profile, task, title string, a agent.Agent) error {
+	profile := chosen.Name
+	if profile == (profilename.Name{}) {
+		var err error
+		if profile, err = profilename.Sandbox(project, a); err != nil {
+			return fmt.Errorf("name the %s Profile of project %s: %w", a, project, err)
+		}
 	}
 	l := sessionbus.Launch{TS: at, Project: project, Agent: a, Profile: profile, Runtime: rt, Task: task, Title: title}
 	if err := b.sessions.RecordLaunch(ctx, l); err != nil {

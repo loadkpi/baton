@@ -17,6 +17,7 @@ import (
 	"github.com/loadkpi/baton/business/domain/runtimebus"
 	"github.com/loadkpi/baton/business/domain/syncbus"
 	"github.com/loadkpi/baton/business/domain/syncbus/stores/syncdocker"
+	"github.com/loadkpi/baton/business/types/agent"
 	"github.com/loadkpi/baton/business/types/projectname"
 	"github.com/loadkpi/baton/business/types/runtime"
 	"github.com/loadkpi/baton/foundation/docker"
@@ -92,6 +93,11 @@ func (r *Runtime) Targets(ctx context.Context, cfg configbus.Config) ([]syncbus.
 		home, _ := svc.Home(ctx)
 		for _, p := range ps.Compose.Profiles {
 			p.Dir = expandHome(p.Dir, home)
+			if p.Dir == "" && p.Agent == agent.Codex {
+				// CODEX_HOME of the service, else ~/.codex. A service that
+				// cannot be reached leaves it empty, and Check says why.
+				p.Dir, _ = svc.CodexHome(ctx)
+			}
 			targets = append(targets, syncbus.Target{
 				Profile:    p,
 				Runtime:    runtime.Compose,

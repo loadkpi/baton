@@ -133,7 +133,7 @@ func (r *Runtime) ContainerPath(ctx context.Context, project projectname.Name, p
 	return containerPath(box.Mounts, p)
 }
 
-// Start prepares the launch of Claude in the Project's service and describes
+// Start prepares the launch of an Agent in the Project's service and describes
 // the tab that runs it:
 //
 //  1. the service is brought up when it is not running (`docker compose up -d
@@ -142,13 +142,9 @@ func (r *Runtime) ContainerPath(ctx context.Context, project projectname.Name, p
 //     does not, the error carries the snippet for the user's override file;
 //  3. the Project's directory in the container is found from the container's
 //     mounts;
-//  4. the tab runs `docker compose exec -w <dir> <service> env -u ... claude`.
-//
-// Codex is not started in a Compose container yet.
+//  4. the tab runs `docker compose exec -w <dir> <service> env -u ... claude`
+//     (or codex, with CODEX_HOME set to the Profile's directory).
 func (r *Runtime) Start(ctx context.Context, req runtimebus.StartRequest) (runtimebus.Tab, error) {
-	if req.Agent != agent.Claude {
-		return runtimebus.Tab{}, fmt.Errorf("%s does not run in a compose container yet; only claude does", req.Agent)
-	}
 	svc, err := r.service(ctx, req.Project)
 	if err != nil {
 		return runtimebus.Tab{}, err
@@ -186,12 +182,32 @@ func (r *Runtime) Start(ctx context.Context, req runtimebus.StartRequest) (runti
 	for _, name := range apiKeyVars {
 		words = append(words, "-u", name)
 	}
-	if profileDir := expandHome(req.Profile.Dir, string(home)); profileDir == "" || path.Clean(profileDir) == path.Join(string(home), ".claude") {
-		// Claude Code reads ~/.claude when the variable is unset; one that the
-		// container was created with would send it somewhere else.
-		words = append(words, "-u", "CLAUDE_CONFIG_DIR")
-	} else {
-		words = append(words, "CLAUDE_CONFIG_DIR="+profileDir)
+	profileDir := expandHome(req.Profile.Dir, string(home))
+	switch req.Agent {
+	case agent.Claude:
+		if profileDir == "" || path.Clean(profileDir) == path.Join(string(home), ".claude") {
+			// Claude Code reads ~/.claude when the variable is unset; one that the
+			// container was created with would send it somewhere else.
+			words = append(words, "-u", "CLAUDE_CONFIG_DIR")
+		} else {
+			words = append(words, "CLAUDE_CONFIG_DIR="+profileDir)
+		}
+	case agent.Codex:
+		if profileDir == "" {
+			// The service's CODEX_HOME, else ~/.codex: the directory sync
+			// wrote into.
+			if profileDir, err = svc.compose.Getenv(ctx, "CODEX_HOME"); err != nil {
+				return runtimebus.Tab{}, fmt.Errorf("project %s, service %s: read CODEX_HOME in the container: %w", req.Project, svc.settings.Service, err)
+			}
+			if profileDir == "" {
+				profileDir = path.Join(string(home), ".codex")
+			}
+		}
+		// Always set, so that Codex reads the Profile that was chosen whatever
+		// the service's own environment says.
+		words = append(words, "CODEX_HOME="+profileDir)
+	default:
+		return runtimebus.Tab{}, fmt.Errorf("%s does not run in a compose container", req.Agent)
 	}
 	words = append(words, req.Agent.Binary())
 	if req.Prompt != "" {

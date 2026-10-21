@@ -237,22 +237,6 @@ func TestComposeNew_AServiceThatDoesNotComeUpOpensNoTab(t *testing.T) {
 	}
 }
 
-func TestComposeNew_CodexIsRefusedUntilItRunsInAComposeContainer(t *testing.T) {
-	env := newEnv(t)
-	env.WriteConfig(composeConfig(env, ""))
-	repo := composeProject(t, env, "app")
-	batonMountedContainer(env, repo, false)
-
-	res := env.Run("new", "app", "--agent", "codex")
-
-	if res.ExitCode == 0 || !strings.Contains(res.Stderr, "codex does not run in a compose container yet") {
-		t.Errorf("exit code = %d, stderr=%q, want codex refused for compose", res.ExitCode, res.Stderr)
-	}
-	if len(env.Calls("guake")) != 0 || len(env.Calls("docker")) != 0 {
-		t.Errorf("guake calls = %v, docker calls = %v, want none", env.Calls("guake"), env.Calls("docker"))
-	}
-}
-
 func TestComposeNew_AGitWorktreeIsRefusedBeforeAnythingIsWritten(t *testing.T) {
 	env := newEnv(t)
 	env.WriteConfig(composeConfig(env, ""))

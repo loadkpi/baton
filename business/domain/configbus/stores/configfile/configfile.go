@@ -310,7 +310,8 @@ func toBusCompose(project string, fc fileCompose, hosted []configbus.Profile) (*
 
 // toBusComposeProfile converts a Profile inside a container. Its Dir stays a
 // path of the container: "~" is the HOME of the container's user, which the
-// host cannot know.
+// host cannot know. A Codex Profile may leave it empty, which means the
+// service's CODEX_HOME, else ~/.codex.
 func toBusComposeProfile(name, agentName, dir string, tags []string) (configbus.Profile, error) {
 	pn, err := profilename.Parse(name)
 	if err != nil {
@@ -320,10 +321,10 @@ func toBusComposeProfile(name, agentName, dir string, tags []string) (configbus.
 	if err != nil {
 		return configbus.Profile{}, fmt.Errorf("profile %s: %w", name, err)
 	}
-	if a != agent.Claude {
-		return configbus.Profile{}, fmt.Errorf("profile %s: agent %q is not supported in a compose container yet (its MCP servers need a config.toml editor)", name, a)
-	}
 	switch {
+	case dir == "" && a == agent.Codex:
+		// Codex's home is CODEX_HOME of the service, else ~/.codex; only the
+		// container knows, so it is found when the Profile is used.
 	case dir == "~":
 	case strings.HasPrefix(dir, "~/"):
 		dir = "~/" + strings.TrimPrefix(path.Clean("/"+dir[2:]), "/")

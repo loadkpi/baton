@@ -47,6 +47,9 @@ func (p *Profile) Check(ctx context.Context) error {
 	if err := s.open(ctx); err != nil {
 		return err
 	}
+	if !path.IsAbs(p.dir) {
+		return s.errorf("the directory of the Profile is %q, not an absolute path in the container", p.dir)
+	}
 	if s.box.Running {
 		out, err := s.compose.Exec(ctx, nil, "sh", "-c", dirScript, "sh", p.dir)
 		if err != nil {
@@ -84,8 +87,14 @@ func (p *Profile) Check(ctx context.Context) error {
 	return nil
 }
 
-// Path is rel inside the Profile directory, in the container.
+// Path is rel inside the Profile directory, in the container. The skills of
+// Codex are the exception: Codex reads them from $HOME/.agents/skills, which is
+// next to its directory only when that is $HOME/.codex, not when CODEX_HOME
+// points elsewhere.
 func (p *Profile) Path(rel string) string {
+	if rest, ok := strings.CutPrefix(rel, syncbus.CodexSkillsRel); ok && p.svc.home != "" && (rest == "" || rest[0] == '/') {
+		return path.Join(p.svc.home, ".agents/skills", rest)
+	}
 	return path.Join(p.dir, rel)
 }
 

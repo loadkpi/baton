@@ -182,7 +182,7 @@ const manifestVersion = 1
 
 // codexSkillsDir is the one directory outside a Profile directory where sync
 // owns files (relative to it): where Codex reads user skills.
-const codexSkillsDir = "../.agents/skills"
+const codexSkillsDir = syncbus.CodexSkillsRel
 
 func toFileManifest(profile profilename.Name, m syncbus.Manifest) fileManifest {
 	fm := fileManifest{Version: manifestVersion, Profile: profile.String(), Files: []fileOwned{}}

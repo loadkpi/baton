@@ -29,8 +29,9 @@ type wantedKey struct {
 	Template any
 }
 
-// jsonTarget is one shared JSON file and the keys of it that Baton owns.
-type jsonTarget struct {
+// keysTarget is one shared file and the keys of it that Baton owns: a JSON
+// document, or a TOML one when toml is set, whose keys are tables (tomlfile.go).
+type keysTarget struct {
 	// rel is the path inside the Profile directory, as the manifest records it.
 	rel string
 	// backupRel names the copy in the backup directory; name is the file name
@@ -47,16 +48,35 @@ type jsonTarget struct {
 	hasSecrets bool
 	// hidden are the secrets that must not appear in what a question shows.
 	hidden map[string]string
+	// toml says that the file is TOML, and every wanted value a table
+	// (map[string]any) at its key.
+	toml bool
 }
 
-// planJSONKeys plans Baton's keys in a shared JSON file.
+// emptyDocument is what a file that does not exist yet is edited from.
+func (t keysTarget) emptyDocument() []byte {
+	if t.toml {
+		return nil
+	}
+	return []byte("{}\n")
+}
+
+// edit applies the target to the document.
+func (t keysTarget) edit(data []byte, previous Manifest) (keysEdit, error) {
+	if t.toml {
+		return editTables(data, previous, t)
+	}
+	return editKeys(data, previous, t)
+}
+
+// planKeys plans Baton's keys in a shared JSON or TOML file.
 //
 // The file belongs to someone else and Baton owns only the keys it recorded in
 // the manifest. A file that does not exist yet is nobody's, so it is created
 // without a question. Baton's keys are updated, added or removed without one
 // while they are still what Baton wrote; anything else is a question, which
 // shows only Baton's keys.
-func (b *Bus) planJSONKeys(ctx context.Context, plan *profilePlan, previous Manifest, t jsonTarget) error {
+func (b *Bus) planKeys(ctx context.Context, plan *profilePlan, previous Manifest, t keysTarget) error {
 	owned := make([]OwnedKey, 0, len(t.wanted))
 	for _, w := range t.wanted {
 		owned = append(owned, OwnedKey{Path: t.rel, Key: w.Key, Item: w.Item, Sum: sumOfJSON(w.Value)})
@@ -77,7 +97,7 @@ func (b *Bus) planJSONKeys(ctx context.Context, plan *profilePlan, previous Mani
 		if len(t.wanted) == 0 {
 			return nil
 		}
-		edit, err := editKeys([]byte("{}\n"), previous, t)
+		edit, err := t.edit(t.emptyDocument(), previous)
 		if err != nil {
 			return fmt.Errorf("%s: %w", file.Path, err)
 		}
@@ -91,7 +111,7 @@ func (b *Bus) planJSONKeys(ctx context.Context, plan *profilePlan, previous Mani
 		return fmt.Errorf("%s is accessible by others (mode %04o) and would receive secrets; run: chmod 600 %s", file.Path, file.Mode.Perm(), file.Path)
 	}
 
-	edit, err := editKeys(file.Data, previous, t)
+	edit, err := t.edit(file.Data, previous)
 	if err != nil {
 		return fmt.Errorf("%s: %w", file.Path, err)
 	}
@@ -128,7 +148,7 @@ type keysEdit struct {
 }
 
 // editKeys applies the target to the document.
-func editKeys(data []byte, previous Manifest, t jsonTarget) (keysEdit, error) {
+func editKeys(data []byte, previous Manifest, t keysTarget) (keysEdit, error) {
 	edit := keysEdit{data: data}
 	var oldView, newView strings.Builder
 	var labels []string
@@ -151,14 +171,8 @@ func editKeys(data []byte, previous Manifest, t jsonTarget) (keysEdit, error) {
 			edit.unchanged++
 			continue
 		}
-		recorded, owned := recordedKeySum(previous, t.rel, w.Key, w.Item)
-		switch {
-		case found && (!owned || sumOfRaw(raw) != recorded):
-			edit.needsAsk = true // someone else's, or edited since
-		case !found && owned:
-			edit.needsAsk = true // cut out by hand
-		case !found && !ownsAnyIn(previous, t.rel):
-			edit.needsAsk = true // the first time Baton adds its part to this file
+		if mustAsk(previous, t.rel, w, found, sumOfRaw(raw)) {
+			edit.needsAsk = true
 		}
 		template := w.Template
 		if template == nil {
@@ -209,6 +223,24 @@ func editKeys(data []byte, previous Manifest, t jsonTarget) (keysEdit, error) {
 		}
 	}
 	return edit, nil
+}
+
+// mustAsk says whether changing a key that Baton wants, in a file it shares,
+// is something to ask about: the key is there and was not written by Baton or
+// was edited since (sum is the checksum of what is there), or Baton wrote it
+// and it was cut out, or this is the first time Baton adds its part to the
+// file.
+func mustAsk(previous Manifest, rel string, w wantedKey, found bool, sum string) bool {
+	recorded, owned := recordedKeySum(previous, rel, w.Key, w.Item)
+	switch {
+	case found && (!owned || sum != recorded):
+		return true // someone else's, or edited since
+	case !found && owned:
+		return true // cut out by hand
+	case !found && !ownsAnyIn(previous, rel):
+		return true // the first time Baton adds its part to this file
+	}
+	return false
 }
 
 // locate finds the value of a key: the member at key, or, with an item, the

@@ -15,6 +15,12 @@ import (
 // instructionsFile is where the source's instructions go in a Claude Profile.
 const instructionsFile = "CLAUDE.md"
 
+// codexInstructionsFile is where they go in a Codex Profile whose files are
+// edited in place. Codex reads the first non-empty of AGENTS.override.md and
+// AGENTS.md in its home [from a search result, not the vendor page], so a
+// Profile that has an override file does not read Baton's block.
+const codexInstructionsFile = "AGENTS.md"
+
 // blockMarkers delimit the part of a Markdown file that is Baton's.
 var blockMarkers = mdblock.Markers{Begin: "<!-- baton:begin -->", End: "<!-- baton:end -->"}
 
@@ -73,7 +79,7 @@ func (b *Bus) planInstructions(ctx context.Context, plan *profilePlan, previous 
 		wantedFiles[instructionsFragmentFile] = true
 		return b.planOwnedFile(ctx, plan, owned, instructionsFragmentFile, f)
 	}
-	rel := instructionsFile
+	rel := plan.layout.instructionsRel
 	sum, recorded := recordedSum(previous, rel)
 
 	if wanted {
