@@ -31,7 +31,8 @@ type Hook struct {
 // of a file name. Claude Code uses UUIDs.
 var sessionIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`)
 
-// Record appends the Event of a hook call to the file of its Session.
+// Record appends the Event of a hook call to the file of its Session, with the
+// secrets of its payload masked.
 func (b *Bus) Record(ctx context.Context, h Hook) error {
 	var fields struct {
 		SessionID string `json:"session_id"`
@@ -47,6 +48,8 @@ func (b *Bus) Record(ctx context.Context, h Hook) error {
 	if fields.Event == "" {
 		return errors.New("payload has no hook_event_name")
 	}
+
+	payload, masked := b.maskPayload(ctx, h.Payload)
 
 	host, err := b.machine.QueryHostname(ctx)
 	if err != nil {
@@ -73,7 +76,8 @@ func (b *Bus) Record(ctx context.Context, h Hook) error {
 		SessionID:        fields.SessionID,
 		Name:             fields.Event,
 		CWD:              fields.CWD,
-		Payload:          h.Payload,
+		Payload:          payload,
+		Masked:           masked,
 	})
 }
 

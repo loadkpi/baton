@@ -10,6 +10,7 @@ import (
 
 	"github.com/loadkpi/baton/business/domain/runtimebus"
 	"github.com/loadkpi/baton/business/domain/sessionbus"
+	"github.com/loadkpi/baton/business/domain/sessionbus/stores/secretsfile"
 	"github.com/loadkpi/baton/business/domain/sessionbus/stores/sessionfile"
 	"github.com/loadkpi/baton/business/domain/sessionbus/stores/sessionproc"
 	"github.com/loadkpi/baton/business/types/agent"
@@ -29,8 +30,8 @@ const containerRootVar = "BATON_CONTAINER_ROOT"
 
 // runHook implements `baton hook <agent> --profile <name> --runtime <runtime>`,
 // which Agents call from their hooks. It reads the payload from standard input
-// and appends the Event to the Session's file. It prints nothing on success:
-// an Agent may read what a hook writes.
+// and appends the Event to the Session's file, with the secrets in it masked
+// (D7). It prints nothing on success: an Agent may read what a hook writes.
 //
 // Every failure exits with 1, never 2: for Claude Code an exit code of 2 from a
 // hook blocks the action the hook is about.
@@ -66,7 +67,10 @@ func runHook(ctx context.Context, c console, home string, args []string) int {
 		return c.errorf("hook: %v", err)
 	}
 
-	bus := sessionbus.New(storer, sessionproc.NewIn(os.Getenv(containerRootVar)))
+	// The secrets file is the host's: in a container it is not mounted, and the
+	// hook then masks by pattern only.
+	secrets := secretsfile.New(filepath.Join(home, ".config", "baton", "secrets.env"))
+	bus := sessionbus.New(storer, sessionproc.NewIn(os.Getenv(containerRootVar))).WithSecrets(secrets)
 	if err := bus.Record(ctx, h); err != nil {
 		return c.errorf("hook: %v", err)
 	}

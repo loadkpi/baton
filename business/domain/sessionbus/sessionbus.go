@@ -2,7 +2,7 @@
 // Sessions from them.
 //
 // The hook only appends: it calls no git, looks up no Project and interprets
-// no payload beyond copying three fields. Everything else (statuses, and later
+// no payload beyond copying three fields and masking secrets. Everything else (statuses, and later
 // notifications and lost detection) is derived by readers from the Event files.
 package sessionbus
 
@@ -43,8 +43,12 @@ type Event struct {
 	// Name is the Event's name: hook_event_name of the payload.
 	Name string
 	CWD  string
-	// Payload is what the Agent sent, as one line of JSON.
+	// Payload is what the Agent sent, as one line of JSON, with its secrets
+	// masked.
 	Payload []byte
+	// Masked is set when a secret was masked in Payload, which is then not
+	// the bytes the Agent sent.
+	Masked bool
 	// Source says who wrote the Event: empty for the Agent's hook (the only
 	// source until `baton session end`), SourceBaton for Baton itself. An
 	// Event of Baton is not Agent data: it names no process, and carries no
@@ -59,6 +63,14 @@ const SourceBaton = "baton"
 // FromAgent reports whether the Agent reported the Event, as opposed to Baton
 // having written it.
 func (e Event) FromAgent() bool { return e.Source == "" }
+
+// Secrets is the source of the literal secrets that are masked in a payload.
+type Secrets interface {
+	// QuerySecretValues returns the values of the user's secrets. An error
+	// (nothing to read, a file others can read, a malformed one) means that
+	// the hook masks by pattern only.
+	QuerySecretValues(ctx context.Context) ([]string, error)
+}
 
 // Process is a process of the machine the hook runs on.
 type Process struct {
@@ -123,12 +135,20 @@ type Bus struct {
 	storer   Storer
 	machine  Machine
 	runtimes map[runtime.Runtime]runtimebus.Runtime
+	secrets  Secrets
 	now      func() time.Time
 }
 
 // New creates the Session domain over the Event files and the machine.
 func New(storer Storer, machine Machine) *Bus {
 	return &Bus{storer: storer, machine: machine, now: time.Now}
+}
+
+// WithSecrets lets the hook mask the user's own secrets too. Without it a
+// payload is masked by pattern only.
+func (b *Bus) WithSecrets(secrets Secrets) *Bus {
+	b.secrets = secrets
+	return b
 }
 
 // WithRuntimes lets the Bus tell whether the Agent of a Session still runs, by

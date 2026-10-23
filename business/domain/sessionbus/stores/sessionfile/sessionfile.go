@@ -62,6 +62,8 @@ type fileEvent struct {
 	Event            string          `json:"event"`
 	CWD              string          `json:"cwd"`
 	Payload          json.RawMessage `json:"payload"`
+	// Masked is set, only then, when a secret was masked in the payload.
+	Masked bool `json:"masked,omitempty"`
 	// Source is set, only then, on an Event that Baton wrote itself.
 	Source string `json:"source,omitempty"`
 }
@@ -82,6 +84,7 @@ func toFileEvent(e sessionbus.Event) fileEvent {
 		Event:            e.Name,
 		CWD:              e.CWD,
 		Payload:          e.Payload,
+		Masked:           e.Masked,
 		Source:           e.Source,
 	}
 }
@@ -104,8 +107,9 @@ func (s *Store) refPath(ref sessionbus.SessionRef) string {
 }
 
 // SaveEvent appends the Event to <dir>/<agent>-<session id>.jsonl, mode 0600.
-// The raw payload is written as it came, apart from the white space between
-// its tokens, which would break the one line per Event.
+// The payload is written as it came (secrets masked, see sessionbus), apart
+// from the white space between its tokens, which would break the one line per
+// Event.
 func (s *Store) SaveEvent(_ context.Context, e sessionbus.Event) error {
 	return appendEvent(s.eventPath(e.Agent.String(), e.SessionID), e)
 }
@@ -231,6 +235,6 @@ func toBusEvent(line []byte) (sessionbus.Event, error) {
 	return sessionbus.Event{
 		TS: ts, Agent: a, Profile: p, Runtime: r, Host: fe.Host,
 		AgentPID: fe.AgentPID, AgentStart: fe.AgentStart, AgentPIDFallback: fe.AgentPIDFallback, Container: fe.Container,
-		SessionID: fe.SessionID, Name: fe.Event, CWD: fe.CWD, Payload: fe.Payload, Source: fe.Source,
+		SessionID: fe.SessionID, Name: fe.Event, CWD: fe.CWD, Payload: fe.Payload, Masked: fe.Masked, Source: fe.Source,
 	}, nil
 }

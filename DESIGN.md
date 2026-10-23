@@ -90,7 +90,7 @@ flowchart LR
   watch --> notify[notify-send<br/>Telegram]
 ```
 
-- **`baton hook <agent> --profile <name> --runtime <host|sandbox|compose>`** is the only thing Agents call. `baton sync` writes the flags into each Profile's hook definitions, because it knows which Profile it renders; no environment variables are involved. The hook reads the payload from stdin and appends one line to the Session's Event file under a file lock: schema version `v`, `ts`, `agent`, `profile`, `runtime`, `host` (the container id inside a container Runtime), `agent_pid` and `agent_start` (the Agent's process and its start time from `/proc/<pid>/stat`, so a reused PID never makes a dead Session look alive), `session_id`, `event` and `cwd` copied from the payload, and the raw `payload`. It does not call git, resolve the Project or interpret the payload, so it is fast enough even for Codex's 1-second `SessionEnd` budget.
+- **`baton hook <agent> --profile <name> --runtime <host|sandbox|compose>`** is the only thing Agents call. `baton sync` writes the flags into each Profile's hook definitions, because it knows which Profile it renders; no environment variables are involved. The hook reads the payload from stdin and appends one line to the Session's Event file under a file lock: schema version `v`, `ts`, `agent`, `profile`, `runtime`, `host` (the container id inside a container Runtime), `agent_pid` and `agent_start` (the Agent's process and its start time from `/proc/<pid>/stat`, so a reused PID never makes a dead Session look alive), `session_id`, `event` and `cwd` copied from the payload, and the `payload` with its secrets masked (D7). It does not call git, resolve the Project or interpret the payload, so it is fast enough even for Codex's 1-second `SessionEnd` budget.
 - **Where Events go.** On the host: `~/.baton/sessions/<agent>-<session_id>.jsonl`, keyed by the Session only. In a sandbox or a Compose container: the mounted `~/.baton/projects/<project>/sessions/`, where the Project is known. Readers (`ls`, `watch`, `new`, `handoff`) resolve Project, Working copy and Task from `cwd` and register unknown Projects (D1).
 - **`baton ls`** and **`baton watch`** derive Session statuses from Events. `baton watch` is a stateless Daemon under `systemd --user` that sends notifications (D6). `lost` is always computed on read, so neither command depends on the other. If it is down, Sessions and `baton ls` keep working; you only lose notifications.
 - **One Go binary** (`CGO_ENABLED=0`) in `~/.baton/bin` provides all commands. The sandbox image has `python3`, `bash` and `jq` but no Go; the static binary is mounted read-only, so the same code runs on both sides.
@@ -101,7 +101,7 @@ flowchart LR
 ```
 ~/.config/baton/
   config.toml                 # source repository path, host Profiles (and their tags, ticket 03)
-  secrets.env                 # values for ${VAR} placeholders and the Telegram bot token, mode 0600
+  secrets.env                 # values for ${VAR} placeholders and the Telegram bot token, mode 0600; `baton hook` masks them in Events (ticket 21)
 ~/.baton/
   away                        # exists while `baton away` is in force (ticket 13)
   bin/baton                   # mounted read-only into sandboxes
@@ -176,8 +176,8 @@ Decided while building `baton hook` and `baton ls`. Codex (ticket 10) and the ot
 {"v":1,"ts":"2026-10-20T10:15:00.123456789Z","agent":"claude","profile":"claude-personal","runtime":"host","host":"laptop","agent_pid":4242,"agent_start":9876543,"session_id":"abc123","event":"Stop","cwd":"/home/me/app","payload":{...}}
 ```
 
-- `ts` is UTC, RFC 3339 with nanoseconds. `host` is the host name, which in a container is the container id. `agent_start` is the Agent's start time in clock ticks since boot (field 22 of `/proc/<pid>/stat`): an integer that is only ever compared for equality, so it needs no conversion to wall-clock time and survives the `CLK_TCK` of the machine. `agent_pid_fallback: true` is present, only then, when no ancestor was recognized as the Agent (below). `container` (ticket 18, below) is the full id of the container the hook ran in, present only when the hook runs in a container and could find it; `v` stays 1, because a reader that does not know the field ignores it, and one that does treats its absence as "not known". `source` (ticket 20, below) is present, only then, on an Event that Baton wrote itself and not the Agent's hook; `host`, `agent_pid` and `agent_start` are left out of a line when they are zero (a hook always has a host name and a PID, so its lines are unchanged).
-- `session_id`, `event` (`hook_event_name`) and `cwd` are copied from the payload; `payload` is the payload itself, compacted to one line and otherwise as the Agent wrote it (no HTML escaping). Nothing else is read from it. A payload that is not a JSON object, or has no `hook_event_name`, or whose `session_id` cannot be a file name (`[A-Za-z0-9][A-Za-z0-9._-]{0,127}`; Claude uses UUIDs) is refused: nothing is written and the exit code is 1. The hook never exits with 2, because for Claude Code an exit code of 2 from a hook blocks the action it is about. On success it prints nothing.
+- `ts` is UTC, RFC 3339 with nanoseconds. `host` is the host name, which in a container is the container id. `agent_start` is the Agent's start time in clock ticks since boot (field 22 of `/proc/<pid>/stat`): an integer that is only ever compared for equality, so it needs no conversion to wall-clock time and survives the `CLK_TCK` of the machine. `agent_pid_fallback: true` is present, only then, when no ancestor was recognized as the Agent (below). `container` (ticket 18, below) is the full id of the container the hook ran in, present only when the hook runs in a container and could find it; `v` stays 1, because a reader that does not know the field ignores it, and one that does treats its absence as "not known". `source` (ticket 20, below) is present, only then, on an Event that Baton wrote itself and not the Agent's hook; `masked: true` (ticket 21, D7) is present, only then, when a secret was masked in the payload; `host`, `agent_pid` and `agent_start` are left out of a line when they are zero (a hook always has a host name and a PID, so its lines are unchanged).
+- `session_id`, `event` (`hook_event_name`) and `cwd` are copied from the payload; `payload` is the payload itself, compacted to one line and otherwise as the Agent wrote it (no HTML escaping), except that secrets are masked (D7; a payload with a masked secret is encoded again, so its keys may be in another order). Nothing else is read from it. A payload that is not a JSON object, or has no `hook_event_name`, or whose `session_id` cannot be a file name (`[A-Za-z0-9][A-Za-z0-9._-]{0,127}`; Claude uses UUIDs) is refused: nothing is written and the exit code is 1. The hook never exits with 2, because for Claude Code an exit code of 2 from a hook blocks the action it is about. On success it prints nothing.
 - The file is `~/.baton/sessions/<agent>-<session_id>.jsonl`, created with mode 0600 in a 0700 directory. The hook opens it with `O_APPEND`, takes an exclusive `flock` on it, writes the whole line (with its newline) in one `write` and closes it. The lock is on the Event file itself, so there is no lock file to list or clean up. Readers take no lock: they read only lines that end in a newline, and skip lines that are not Events, so a line that is half written is never seen.
 - The hook calls no git and registers no Project. Claude Code gives `SessionEnd` hooks 1.5 seconds by default ([Claude Code: Hooks](https://code.claude.com/docs/en/hooks), checked Oct 20, 2026), which a process that reads stdin and appends one line fits easily; Baton writes no `timeout` into its hooks.
 
@@ -723,7 +723,7 @@ created: <RFC 3339, UTC>
 - *git*: `git status --short`, `git diff --stat`, `git diff --cached --stat`, run with `--no-optional-locks`; the branch is `(detached HEAD)` when there is none, and a repository with no commit says so.
 - *The link to the Event file is a host path.* A sandbox receiver sees it only if the file is one of a sandbox Session of that Project (`/baton/project/sessions/...`); the Event file of a host Session is not mounted. The receiving Session gets the Handoff itself, which is mounted.
 - *The first message* is `continue the Task from Handoff <path>`, with the path **as the receiving Runtime sees it**: `Runtime.ContainerPath` (host: the path; sandbox: `/baton/project/handoffs/<task-id>/<n>.md`, from the fixed mount of the Project's directory, which needs no record of an earlier container). The message is the last word of the Agent's command (`claude '<message>'`, and in the sandbox after `env -u ... codex`, outside what `run.sh` prints).
-- **Known exposure.** The commands are written as the Events recorded them, and a command string can hold a secret the user typed or an Agent composed (a token in a `curl` header). The spec wants the commands, so they are kept, not masked; the file is 0600 and stays under `~/.baton`, like the Event files it is taken from (D7). A sandbox Agent can read it through the mount (and the receiving Agent will, by design). Nothing in a Handoff goes to Telegram or a notification.
+- **Known exposure.** The commands are written as the Events recorded them. Since ticket 21 the hook masks secrets in the payload before it writes the Event (D7), so a token in a `curl` header shows as `[REDACTED]` here too; what the hook could not recognize (a secret that fits no pattern and is not in `secrets.env`) and commands from Events written before ticket 21 are shown as they are. The file is 0600 and stays under `~/.baton`, like the Event files it is taken from (D7). A sandbox Agent can read it through the mount (and the receiving Agent will, by design). Nothing in a Handoff goes to Telegram or a notification.
 - *Accepted for v1*: if the process dies between writing `<n>.md` and removing the draft, the next Handoff uses the stale draft; two `baton handoff` of one Task at once are serialized by the lock but both start a Session (the second is refused by the one-active-Session rule if the first started already).
 
 #### `/baton-handoff` and `baton handoff save` (ticket 15)
@@ -807,7 +807,19 @@ The token is a secret, so it lives in `~/.config/baton/secrets.env` (mode 0600, 
 
 ### D7. Event archive
 
-The Event files are the archive. v1 stores raw Events as JSONL with mode 0600, without normalization, without parsing the Agents' native session files, and without a retention limit; search is `rg`. Raw `PostToolUse` payloads may contain secrets from command output; masking and retention come in v2 together with real search.
+The Event files are the archive. v1 stores Events as JSONL with mode 0600, without normalization, without parsing the Agents' native session files, and without a retention limit; search is `rg`. Retention comes in v2 together with real search. Secrets are masked at write (ticket 21); the archive is therefore "raw except for secrets".
+
+**What is masked, and where.** `baton hook` (all Runtimes, both Agents) masks every string value of the payload before the Event is written, and only there. Keys, numbers, booleans and `null` are not touched, and neither are the `session_id` and `cwd` the Event keeps outside the payload. A secret is replaced by `[REDACTED]`; it is one of:
+
+- a value of `~/.config/baton/secrets.env` (the file and the reader of `baton sync`, `foundation/secretsenv`) of at least 8 characters; a longer value is replaced before a shorter one inside it;
+- a PEM private key block, from `-----BEGIN ... PRIVATE KEY-----` to an END line, or to the end of the string when the text is cut;
+- a bearer token (`Bearer <token>`; the word stays);
+- a token of a well-known shape: `sk-ant-...`, `sk-...` of 20 or more characters, GitHub (`ghp_`, `gho_`, `ghu_`, `ghs_`, `ghr_`, `github_pat_`), GitLab `glpat-`, Slack `xox[abprs]-`, AWS `AKIA` + 16, Google `AIza` + 35, a JWT, a Telegram bot token;
+- the value of `NAME=value`, `NAME: value` or `"NAME": "value"` where the name has `token`, `secret`, `password`, `passwd`, `api_key`/`api-key`/`apikey` or `private_key` in it, in any case (the name stays).
+
+The patterns are `foundation/redact`, which knows nothing about Baton; the choice of what to mask and where is `sessionbus`. A payload where nothing was masked is written exactly as before. One where something was masked is parsed and encoded again (numbers keep their digits, no HTML escaping, keys may be in another order) and its Event has `"masked": true`, a new optional field of version 1. A hook that cannot read `secrets.env` (missing, mode that lets others read it, malformed, or a container where it is not mounted: `~/.config/baton` is not among the mounts) masks by pattern only, silently: it never fails, prints nothing and quotes nothing from the file. What a Handoff shows of a command is read from the masked payload, so it shows the mask too.
+
+**What is not masked.** Anything a human or the Agent wrote before the hook ran (the prompt or the command is masked in its Event, not where the Agent itself keeps it); the Agents' own session files and transcripts, which Baton does not read or write; Events written before ticket 21; Events that Baton writes itself (they carry no payload of an Agent); a secret that fits no pattern and is not in `secrets.env` (a password in prose, a token of an unknown shape); a secret that is a *value in a structured field* whose key says secret (`{"password": "x"}` as JSON, not as text: the value alone matches no pattern, and keys are not looked at); a secret that is split between two strings of the payload. The patterns can also hide something that is not a secret (`max_tokens=4096` in a command, a word after `Bearer`); that is accepted, a mask in a command is cheap to read around. The RE2 engine of Go has no back-references, so the END line of a private key block need not name the kind of the BEGIN line. The patterns follow the formats the services document, from memory, and were tested on made-up tokens only; that they match every real token of those services is [unverified].
 
 ### D8. Terminal: Guake now, tmux as an experiment
 
@@ -841,7 +853,7 @@ tmux is not installed today. It is tried for a week inside Guake with an "invisi
 | Scope creep into an "IDE for agents" | High | v1 is five goals; everything else is listed in v2 with no design work until v1 is used daily |
 | `AI_SANDBOX_PRINT_ARGS` format changes | Low | It is covered by `ai-sandbox`'s own tests; ADR 0001 marks it as a contract |
 | An Agent in a sandbox tampers with Baton files of its Project | Low | Only that Project's directory is mounted; the binary is read-only; Events are an audit trail, not a security boundary |
-| Secrets in the Event archive, in Handoffs or in Profiles | Medium | 0600 files (a Handoff holds command strings from Events as recorded, D5), no command output in Telegram, secrets reach a Profile only through its tags |
+| Secrets in the Event archive, in Handoffs or in Profiles | Medium | 0600 files (a Handoff holds command strings from Events as recorded, D5, with the secrets masked at write since ticket 21, D7), no command output in Telegram, secrets reach a Profile only through its tags |
 | Sync overwrites something it does not own | Medium | Manifest of owned files and of owned parts of shared files; diff, question and backup before the first change to a shared file; stop when there is no terminal to ask in |
 | Codex Sessions in a new sandbox stay invisible | Medium | `baton ls` flags Codex Sessions without Events and points to `/hooks` |
 | Terms-of-use violation | Low while personal | Official CLIs only, no tokens in code, API keys removed from the environment, everything for one user |
@@ -863,6 +875,8 @@ Four stages; each is usable on its own.
 
 ## v2 and later
 
+Done since this table was written: secret masking in Events (ticket 21, D7).
+
 | What | Why it waits |
 | --- | --- |
 | Daemon with API and state; web dashboard with an embedded terminal | Needs attachable Terminals (tmux or `dtach`) and a frontend stack |
@@ -874,7 +888,7 @@ Four stages; each is usable on its own.
 | Worktrees inside the sandbox | Needs `ai-sandbox` to mount the Project at its host path (generic mechanism), so git worktree paths resolve |
 | Shared vs per-Project sandbox Profiles | One login and history everywhere vs isolation between Projects; to be discussed |
 | Limit snapshots and automatic Agent/Profile switch on limit | No reliable source of limits; manual Handoff first shows whether switching is frequent |
-| Normalized archive, search, secret masking, retention | `rg` over raw Events may be enough |
+| Normalized archive, search, retention (ticket 22) | `rg` over raw Events may be enough |
 | Jump to the Guake tab from a notification; live status in tab titles | Needs a stable tab ↔ Session link |
 | Cursor file for `baton watch`: after a restart, notify what is still true | v1 accepts losing notifications while the watcher is down |
 | Re-evaluate Agent Deck and similar tools | After the tmux experiment |
