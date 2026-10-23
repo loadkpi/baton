@@ -207,6 +207,21 @@ func (s *Store) QueryPath(ref sessionbus.SessionRef) string {
 	return s.refPath(ref)
 }
 
+// QuerySize returns the size in bytes of the file of the Session.
+func (s *Store) QuerySize(_ context.Context, ref sessionbus.SessionRef) (int64, error) {
+	info, err := os.Stat(s.refPath(ref))
+	if err != nil {
+		return 0, err
+	}
+	return info.Size(), nil
+}
+
+// DeleteSession deletes the file of the Session under the lock SaveEvent takes
+// on it, when confirm, which runs with the lock held, says to.
+func (s *Store) DeleteSession(_ context.Context, ref sessionbus.SessionRef, confirm func() (bool, error)) (size int64, deleted bool, err error) {
+	return jsonl.Remove(s.refPath(ref), confirm)
+}
+
 // toBusEvent parses one line.
 func toBusEvent(line []byte) (sessionbus.Event, error) {
 	var fe fileEvent

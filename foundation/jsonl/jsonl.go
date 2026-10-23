@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"errors"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 
@@ -27,7 +28,7 @@ func Append(path string, line []byte, perm os.FileMode) (err error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return err
 	}
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND|os.O_CREATE, perm)
+	f, err := openLocked(path, os.O_WRONLY|os.O_APPEND|os.O_CREATE, perm)
 	if err != nil {
 		return err
 	}
@@ -37,12 +38,71 @@ func Append(path string, line []byte, perm os.FileMode) (err error) {
 		}
 	}()
 
-	if err := filelock.LockFile(f); err != nil {
-		return err
-	}
-
 	_, err = f.Write(append(line[:len(line):len(line)], '\n'))
 	return err
+}
+
+// openLocked opens the file at path and takes the exclusive lock on it. A lock
+// is on a file, not on a name: if Remove deleted the file while this process
+// waited for the lock, the lock is on a file nobody can reach, and a line
+// written to it would be lost. So the name is looked at again once the lock is
+// held, and when it no longer leads to the file that was opened, the file is
+// opened again (and created, when flag says so).
+func openLocked(path string, flag int, perm os.FileMode) (*os.File, error) {
+	for {
+		f, err := os.OpenFile(path, flag, perm)
+		if err != nil {
+			return nil, err
+		}
+		if err := filelock.LockFile(f); err != nil {
+			_ = f.Close()
+			return nil, err
+		}
+		held, err := f.Stat()
+		if err != nil {
+			_ = f.Close()
+			return nil, err
+		}
+		current, err := os.Stat(path)
+		switch {
+		case err == nil && os.SameFile(held, current):
+			return f, nil
+		case err == nil || errors.Is(err, fs.ErrNotExist):
+			_ = f.Close() // replaced or deleted while we waited
+		default:
+			_ = f.Close()
+			return nil, err
+		}
+	}
+}
+
+// Remove deletes the file at path, under the lock Append takes on it, so that
+// a line being appended is either in the file when it goes or lands in a new
+// file (Append opens the file again when it finds it gone). confirm runs with
+// the lock held, after any appender that was ahead has finished; the file is
+// deleted only when it returns true. Remove returns the size of the file it
+// deleted. A file that is not there is not deleted and is no error.
+func Remove(path string, confirm func() (bool, error)) (size int64, removed bool, err error) {
+	f, err := openLocked(path, os.O_RDONLY, 0)
+	if errors.Is(err, fs.ErrNotExist) {
+		return 0, false, nil
+	}
+	if err != nil {
+		return 0, false, err
+	}
+	defer func() { _ = f.Close() }()
+
+	if ok, err := confirm(); err != nil || !ok {
+		return 0, false, err
+	}
+	info, err := f.Stat()
+	if err != nil {
+		return 0, false, err
+	}
+	if err := os.Remove(path); err != nil {
+		return 0, false, err
+	}
+	return info.Size(), true, nil
 }
 
 // Forward calls yield with each complete line of the file at path, oldest

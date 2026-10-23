@@ -101,6 +101,14 @@ type Storer interface {
 	QueryEventsBackward(ctx context.Context, ref SessionRef, yield func(Event) bool) error
 	// QueryPath returns the path of the Session's Event file on the host.
 	QueryPath(ref SessionRef) string
+	// QuerySize returns the size in bytes of the Session's Event file.
+	QuerySize(ctx context.Context, ref SessionRef) (int64, error)
+	// DeleteSession deletes the Session's Event file, and only that, under the
+	// same lock on the file as SaveEvent. confirm runs with the lock held and
+	// the file is deleted only if it returns true, so that a decision made
+	// before the lock can be made again after any append that was ahead.
+	// deleted is false when confirm said no or the file was already gone.
+	DeleteSession(ctx context.Context, ref SessionRef, confirm func() (bool, error)) (size int64, deleted bool, err error)
 	// SaveLaunch writes the launch record of its Project and Agent, replacing
 	// the one before it.
 	SaveLaunch(ctx context.Context, l Launch) error
