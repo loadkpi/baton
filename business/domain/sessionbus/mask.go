@@ -10,7 +10,8 @@ import (
 
 // maskPayload returns the payload with the secrets in its string values masked,
 // and whether there were any. The payload is parsed as JSON and every string
-// value goes through the Redactor (keys and every other value are left alone);
+// value goes through the Redactor, and a non-empty one under a key that says
+// secret is replaced whole (keys and every other value are left alone);
 // when nothing changed the payload is returned as it came, otherwise it is
 // encoded again, so its keys may be in another order. Whatever cannot be parsed
 // is returned as it came: Record has parsed it already.
@@ -48,7 +49,10 @@ func (b *Bus) redactor(ctx context.Context) *redact.Redactor {
 	return redact.New(literals)
 }
 
-// maskValue masks the strings inside v, in place for objects and arrays.
+// maskValue masks the strings inside v, in place for objects and arrays. A
+// string directly under a key that says secret is replaced whole; under it a
+// number, a boolean, null, an empty string, an object or an array is not, and
+// the strings inside the last two are looked at one by one.
 func maskValue(r *redact.Redactor, v any) (any, bool) {
 	changed := false
 	switch v := v.(type) {
@@ -58,7 +62,12 @@ func maskValue(r *redact.Redactor, v any) (any, bool) {
 	case map[string]any:
 		for k, e := range v {
 			var c bool
-			if v[k], c = maskValue(r, e); c {
+			if s, ok := e.(string); ok && s != "" && redact.SecretKey(k) {
+				v[k], c = redact.Mask, s != redact.Mask
+			} else {
+				v[k], c = maskValue(r, e)
+			}
+			if c {
 				changed = true
 			}
 		}

@@ -189,13 +189,13 @@ func TestMask_ALongerValueIsReplacedWholeBeforeAShorterOneInsideIt(t *testing.T)
 
 func TestMask_ASecretInAnyStringValueIsMaskedButNotInKeysNumbersOrTheFieldsTheEventKeeps(t *testing.T) {
 	env := newEnv(t)
-	writeSecrets(t, env, 0o600, "LITERAL=literalsecret1\n")
+	writeSecrets(t, env, 0o600, "LITERAL=literalvalue12\n")
 	in := `{
   "session_id": "abc123",
   "hook_event_name": "PostToolUse",
-  "cwd": "/work/literalsecret1",
-  "literalsecret1": "a key is not masked",
-  "tool_input": {"command": "echo literalsecret1", "list": ["literalsecret1", 7, true, null, 1.50]},
+  "cwd": "/work/literalvalue12",
+  "literalvalue12": "a key is not masked",
+  "tool_input": {"command": "echo literalvalue12", "list": ["literalvalue12", 7, true, null, 1.50]},
   "tool_response": {"stdout": "x", "code": 0, "big": 12345678901234567890, "ratio": 0.5, "nothing": null, "ok": false}
 }`
 
@@ -213,7 +213,7 @@ func TestMask_ASecretInAnyStringValueIsMaskedButNotInKeysNumbersOrTheFieldsTheEv
 		"session_id":      "abc123",
 		"hook_event_name": "PostToolUse",
 		"cwd":             "/work/" + mask,
-		"literalsecret1":  "a key is not masked",
+		"literalvalue12":  "a key is not masked",
 		"tool_input": map[string]any{
 			"command": "echo " + mask,
 			"list":    []any{mask, float64(7), true, nil, 1.5},
@@ -225,7 +225,7 @@ func TestMask_ASecretInAnyStringValueIsMaskedButNotInKeysNumbersOrTheFieldsTheEv
 	if !reflect.DeepEqual(event["payload"], want) {
 		t.Errorf("payload = %#v, want %#v", event["payload"], want)
 	}
-	if event["cwd"] != "/work/literalsecret1" || event["session_id"] != "abc123" {
+	if event["cwd"] != "/work/literalvalue12" || event["session_id"] != "abc123" {
 		t.Errorf("cwd = %v, session_id = %v, want the two the Event keeps outside the payload unmasked", event["cwd"], event["session_id"])
 	}
 	if event["masked"] != true {
@@ -333,5 +333,146 @@ func TestMask_AHandoffListsACommandThatCarriedASecretWithTheMask(t *testing.T) {
 		if strings.Contains(got, secret) {
 			t.Errorf("handoff holds a secret: %s", secret)
 		}
+	}
+}
+
+// recordedPayload runs the hook for a payload given as JSON text and returns
+// the payload as the Event file holds it, and the Event.
+func recordedPayload(t *testing.T, env *batontest.Env, in string) (map[string]any, map[string]any) {
+	t.Helper()
+	res := env.RunWithStdin(in, hookArgs("claude-personal")...)
+	if res.ExitCode != 0 || res.Stdout != "" || res.Stderr != "" {
+		t.Fatalf("exit code = %d, stdout=%q, stderr=%q, want a silent success", res.ExitCode, res.Stdout, res.Stderr)
+	}
+	lines := eventLines(t, env, ".baton/sessions/claude-abc123.jsonl")
+	event := lines[len(lines)-1]
+	return event["payload"].(map[string]any), event
+}
+
+func TestMask_AStringValueUnderAKeyThatSaysSecretGoesWholeInAnyCase(t *testing.T) {
+	keys := []string{
+		"token", "access_TOKEN", "Secret", "client_secret", "PASSWORD", "db_passwd",
+		"api_key", "x-api-key", "X-Api-Key", "apikey", "APIKEY", "private_key", "Private-Key", "token_type",
+	}
+	for _, key := range keys {
+		t.Run(key, func(t *testing.T) {
+			env := newEnv(t)
+			in := `{"session_id": "abc123", "hook_event_name": "PostToolUse", "cwd": "/x", "` + key + `": "plain value", "keep": "plain value"}`
+
+			payload, event := recordedPayload(t, env, in)
+
+			if payload[key] != mask || payload["keep"] != "plain value" {
+				t.Errorf("payload = %#v, want %q under %q and the other value as it was", payload, mask, key)
+			}
+			if event["masked"] != true {
+				t.Errorf("masked = %v, want true", event["masked"])
+			}
+		})
+	}
+}
+
+func TestMask_TheKeyRuleReachesObjectsInsideArraysAndKeepsTheStructure(t *testing.T) {
+	env := newEnv(t)
+	in := `{
+  "session_id": "abc123",
+  "hook_event_name": "PostToolUse",
+  "cwd": "/x",
+  "tool_input": {"servers": [{"name": "a", "env": {"API_KEY": "abc"}}, {"name": "b", "Password": "hunter2"}], "list": ["plain", ["x"]]},
+  "secrets": {"first": "one", "nested": {"second": "two", "count": 3}, "list": ["three", 4], "empty": ""}
+}`
+
+	payload, event := recordedPayload(t, env, in)
+
+	want := map[string]any{
+		"session_id":      "abc123",
+		"hook_event_name": "PostToolUse",
+		"cwd":             "/x",
+		"tool_input": map[string]any{
+			"servers": []any{
+				map[string]any{"name": "a", "env": map[string]any{"API_KEY": mask}},
+				map[string]any{"name": "b", "Password": mask},
+			},
+			"list": []any{"plain", []any{"x"}},
+		},
+		"secrets": map[string]any{
+			"first":  "one",
+			"nested": map[string]any{"second": "two", "count": float64(3)},
+			"list":   []any{"three", float64(4)},
+			"empty":  "",
+		},
+	}
+	if !reflect.DeepEqual(payload, want) {
+		t.Errorf("payload = %#v, want %#v: the object under secrets keeps its structure and its leaves, only matched strings go", payload, want)
+	}
+	if event["masked"] != true {
+		t.Errorf("masked = %v, want true", event["masked"])
+	}
+}
+
+func TestMask_OnlyANonEmptyStringIsReplacedByItsKeyNotNumbersBooleansNullEmptyStringsOrKeys(t *testing.T) {
+	env := newEnv(t)
+	in := `{"session_id": "abc123", "hook_event_name": "PostToolUse", "cwd": "/x", "max_tokens": 4096, "token_count": 12, "token_ok": true, "token_none": null, "password": "", "token_obj": {"id": "abc", "password": "p"}, "token_list": ["a", 1, {"api_key": "k"}]}`
+
+	payload, event := recordedPayload(t, env, in)
+
+	want := map[string]any{
+		"session_id": "abc123", "hook_event_name": "PostToolUse", "cwd": "/x",
+		"max_tokens": float64(4096), "token_count": float64(12), "token_ok": true, "token_none": nil,
+		"password":   "",
+		"token_obj":  map[string]any{"id": "abc", "password": mask},
+		"token_list": []any{"a", float64(1), map[string]any{"api_key": mask}},
+	}
+	if !reflect.DeepEqual(payload, want) {
+		t.Errorf("payload = %#v, want %#v", payload, want)
+	}
+	if event["masked"] != true {
+		t.Errorf("masked = %v, want true", event["masked"])
+	}
+}
+
+func TestMask_AStringLeafUnderAKeyThatSaysSecretIsStillMaskedByValue(t *testing.T) {
+	env := newEnv(t)
+	in := `{"session_id": "abc123", "hook_event_name": "PostToolUse", "cwd": "/x", "tokens": ["` + tokGitLab + `", "plain"], "note": "` + tokGitLab + `"}`
+
+	payload, _ := recordedPayload(t, env, in)
+
+	if got := payload["tokens"]; !reflect.DeepEqual(got, []any{mask, "plain"}) {
+		t.Errorf("tokens = %#v, want the array kept and the token in it masked", got)
+	}
+	if payload["note"] != mask {
+		t.Errorf("note = %v, want %q", payload["note"], mask)
+	}
+}
+
+func TestMask_KeysAndTheFieldsTheEventKeepsAreNotChangedByTheKeyRule(t *testing.T) {
+	env := newEnv(t)
+	in := `{"session_id": "abc123", "hook_event_name": "PostToolUse", "cwd": "/work/token", "password": "hunter2"}`
+
+	payload, event := recordedPayload(t, env, in)
+
+	if _, ok := payload["password"]; !ok || payload["password"] != mask {
+		t.Errorf("payload = %#v, want the key password kept with the mask", payload)
+	}
+	if event["cwd"] != "/work/token" || event["session_id"] != "abc123" {
+		t.Errorf("cwd = %v, session_id = %v, want the two outside the payload untouched", event["cwd"], event["session_id"])
+	}
+}
+
+func TestMask_APayloadWithSecretLookingKeysButNoStringValueToMaskIsWrittenAsItCame(t *testing.T) {
+	env := newEnv(t)
+	in := `{"session_id": "abc123", "zeta": 1, "hook_event_name": "Stop", "max_tokens": 4096, "alpha": 1.50, "password": "", "token": null, "cwd": "/x"}`
+
+	res := env.RunWithStdin(in, hookArgs("claude-personal")...)
+
+	if res.ExitCode != 0 {
+		t.Fatalf("exit code = %d, stderr=%q", res.ExitCode, res.Stderr)
+	}
+	text := env.ReadFile(".baton/sessions/claude-abc123.jsonl")
+	wantPayload := `"payload":{"session_id":"abc123","zeta":1,"hook_event_name":"Stop","max_tokens":4096,"alpha":1.50,"password":"","token":null,"cwd":"/x"}`
+	if !strings.Contains(text, wantPayload) {
+		t.Errorf("Event line = %q, want it to contain %s", text, wantPayload)
+	}
+	if strings.Contains(text, `"masked"`) {
+		t.Errorf("Event line = %q, want no masked field", text)
 	}
 }

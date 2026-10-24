@@ -74,6 +74,17 @@ var bearer = regexp.MustCompile(`(?i)(\bbearer[ \t]+)[A-Za-z0-9._~+/=-]+`)
 // submatch 2 the value, which goes.
 var assignment = regexp.MustCompile(`(?i)(["']?[\w.-]*(?:token|secret|password|passwd|api[_-]?key|private[_-]key)[\w.-]*["']?[ \t]*[:=][ \t]*)("[^"]+"|'[^']+'|[^\s"',;&]+)`)
 
+// secretKey is a word that makes a name, such as a JSON key, say that its value
+// is a secret; the same words as in assignment.
+var secretKey = regexp.MustCompile(`(?i)token|secret|password|passwd|api[_-]?key|private[_-]key`)
+
+// SecretKey reports whether name, in any case, has a word of a secret in it. It
+// is for the caller that walks structured data: the value under such a key can
+// be masked whole, whatever it looks like.
+func SecretKey(name string) bool {
+	return secretKey.MatchString(name)
+}
+
 // Mask returns s with its secrets replaced by Mask. It is s itself when there
 // are none.
 func (r *Redactor) Mask(s string) string {
