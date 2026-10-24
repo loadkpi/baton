@@ -12,7 +12,7 @@ import (
 // defaultStubs are the external programs of the outside world. Every Env
 // installs a recording stub for each of them, so a test can never reach the
 // real program even though the real ones exist on the machine.
-var defaultStubs = []string{"guake", "docker", "notify-send", "systemctl", "claude", "codex"}
+var defaultStubs = []string{"guake", "docker", "notify-send", "systemctl", "claude", "codex", "pw-play", "paplay"}
 
 // Call is one recorded invocation of a stub executable.
 type Call struct {
@@ -80,6 +80,42 @@ func (e *Env) Stub(name string, opts ...StubOption) {
 	if err := os.WriteFile(path, []byte(body), 0o755); err != nil {
 		e.t.Fatalf("write stub %s: %v", name, err)
 	}
+}
+
+// Without makes the programs called names missing from the Env's PATH: their
+// stubs are removed, and so are the real ones, which are on the system
+// directories of PATH and would otherwise be run instead. From then on PATH
+// holds the stub directory and a directory of links to the other programs of
+// the system. Recorded calls stay.
+func (e *Env) Without(names ...string) {
+	e.t.Helper()
+	hidden := make(map[string]bool, len(names))
+	for _, name := range names {
+		hidden[name] = true
+		if err := os.Remove(filepath.Join(e.stubDir, name)); err != nil && !os.IsNotExist(err) {
+			e.t.Fatalf("remove stub %s: %v", name, err)
+		}
+	}
+	dir := filepath.Join(filepath.Dir(e.stubDir), "sysbin")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		e.t.Fatal(err)
+	}
+	for _, sys := range e.sysDirs {
+		entries, err := os.ReadDir(sys)
+		if err != nil {
+			e.t.Fatalf("read %s: %v", sys, err)
+		}
+		for _, entry := range entries {
+			if hidden[entry.Name()] {
+				continue
+			}
+			// The first directory of PATH wins, as it does when PATH is walked.
+			if err := os.Symlink(filepath.Join(sys, entry.Name()), filepath.Join(dir, entry.Name())); err != nil && !os.IsExist(err) {
+				e.t.Fatalf("link %s: %v", entry.Name(), err)
+			}
+		}
+	}
+	e.sysDirs = []string{dir}
 }
 
 // Calls returns the recorded invocations of the stub called name, oldest first.

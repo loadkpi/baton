@@ -26,6 +26,7 @@ type Env struct {
 	SourceDir string
 
 	stubDir  string
+	sysDirs  []string // the system directories of PATH, after the stubs
 	callsDir string
 	// containers are the fake Compose containers of AddContainer.
 	containers     []*Container
@@ -47,6 +48,7 @@ func New(t *testing.T, bin string) *Env {
 		Home:      filepath.Join(root, "home"),
 		SourceDir: filepath.Join(root, "source"),
 		stubDir:   filepath.Join(root, "stubs"),
+		sysDirs:   []string{"/usr/bin", "/bin"},
 		callsDir:  filepath.Join(root, "calls"),
 	}
 	for _, d := range []string{e.Home, e.SourceDir, e.stubDir, e.callsDir} {
@@ -162,7 +164,7 @@ func (e *Env) lookPath(name string) string {
 }
 
 func (e *Env) pathDirs() []string {
-	return []string{e.stubDir, "/usr/bin", "/bin"}
+	return append([]string{e.stubDir}, e.sysDirs...)
 }
 
 // Environ is the complete environment of every process an Env runs. It is

@@ -11,6 +11,7 @@ import (
 	"github.com/loadkpi/baton/business/types/profilename"
 	"github.com/loadkpi/baton/business/types/projectname"
 	"github.com/loadkpi/baton/business/types/runtime"
+	"github.com/loadkpi/baton/business/types/sound"
 	"github.com/loadkpi/baton/business/types/tag"
 )
 
@@ -50,6 +51,15 @@ type TelegramSettings struct {
 	APIURL string
 	ChatID string
 	Token  string
+}
+
+// Watch is the [watch] table of the config: the settings of `baton watch`. It
+// is not part of Config because it is read, and validated, only by the command
+// that uses it (see Bus.Watch).
+type Watch struct {
+	// Sound is played after each desktop notification. The zero value means
+	// none.
+	Sound sound.Sound
 }
 
 // ProjectSettings are the settings of one Project in the config.
@@ -169,6 +179,9 @@ type Storer interface {
 	// QuerySecret returns the value of a variable of the secrets file, and
 	// whether it is set there.
 	QuerySecret(ctx context.Context, name string) (value string, ok bool, err error)
+	// QueryWatch returns the [watch] table. Only this call validates it, so
+	// that a mistake in it does not stop the commands that never read it.
+	QueryWatch(ctx context.Context) (Watch, error)
 }
 
 // Bus is the configuration domain.
@@ -209,4 +222,15 @@ func (b *Bus) TelegramSettings(ctx context.Context) (TelegramSettings, error) {
 		return TelegramSettings{}, fmt.Errorf("telegram: %s is not set in the secrets file", cfg.Telegram.TokenVar)
 	}
 	return TelegramSettings{APIURL: cfg.Telegram.APIURL, ChatID: cfg.Telegram.ChatID, Token: token}, nil
+}
+
+// Watch returns the settings of `baton watch`. It fails when the [watch] table
+// is wrong; a config without the table, or without the file, gives the empty
+// settings.
+func (b *Bus) Watch(ctx context.Context) (Watch, error) {
+	w, err := b.storer.QueryWatch(ctx)
+	if err != nil {
+		return Watch{}, fmt.Errorf("load config: %w", err)
+	}
+	return w, nil
 }

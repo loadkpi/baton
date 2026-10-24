@@ -20,6 +20,7 @@ import (
 	"github.com/loadkpi/baton/business/types/agent"
 	"github.com/loadkpi/baton/business/types/profilename"
 	"github.com/loadkpi/baton/business/types/projectname"
+	"github.com/loadkpi/baton/business/types/sound"
 	"github.com/loadkpi/baton/business/types/tag"
 	"github.com/loadkpi/baton/foundation/secretsenv"
 )
@@ -46,6 +47,14 @@ type fileConfig struct {
 	Profiles       map[string]fileProfile `toml:"profiles"`
 	Projects       map[string]fileProject `toml:"projects"`
 	Telegram       *fileTelegram          `toml:"telegram"`
+	Watch          *fileWatch             `toml:"watch"`
+}
+
+// fileWatch is the [watch] table. sound is decoded as it comes, so that a
+// value of the wrong type is an error of `baton watch` only, not of every
+// command that reads the file.
+type fileWatch struct {
+	Sound any `toml:"sound"`
 }
 
 // fileTelegram is the [telegram] table. chat_id is a number or a string, so
@@ -108,6 +117,32 @@ func (s *Store) Query(_ context.Context) (configbus.Config, error) {
 		return configbus.Config{}, fmt.Errorf("%s: %w", s.path, err)
 	}
 	return cfg, nil
+}
+
+// QueryWatch reads the [watch] table and validates it. Query leaves its
+// values alone, so that a wrong one stops `baton watch` and nothing else.
+func (s *Store) QueryWatch(_ context.Context) (configbus.Watch, error) {
+	var fc fileConfig
+	md, err := toml.DecodeFile(s.path, &fc)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return configbus.Watch{}, nil
+		}
+		return configbus.Watch{}, fmt.Errorf("%s: %w", s.path, err)
+	}
+	for _, key := range md.Undecoded() {
+		if key[0] == "watch" {
+			return configbus.Watch{}, fmt.Errorf("%s: unknown key %q", s.path, key.String())
+		}
+	}
+	if fc.Watch == nil {
+		return configbus.Watch{}, nil
+	}
+	w, err := toBusWatch(*fc.Watch)
+	if err != nil {
+		return configbus.Watch{}, fmt.Errorf("%s: %w", s.path, err)
+	}
+	return w, nil
 }
 
 // QuerySecret reads one variable of the secrets file.
@@ -200,6 +235,24 @@ func toBusConfig(fc fileConfig, home string) (configbus.Config, error) {
 		cfg.DefaultProfile = name
 	}
 	return cfg, nil
+}
+
+// toBusWatch converts the [watch] table. The value of a wrong sound is not
+// repeated in the error.
+func toBusWatch(fw fileWatch) (configbus.Watch, error) {
+	var raw string
+	switch v := fw.Sound.(type) {
+	case nil:
+	case string:
+		raw = v
+	default:
+		return configbus.Watch{}, errors.New("watch.sound must be a string: a name from the sound theme or a path")
+	}
+	snd, err := sound.Parse(raw)
+	if err != nil {
+		return configbus.Watch{}, fmt.Errorf("watch.sound: %w", err)
+	}
+	return configbus.Watch{Sound: snd}, nil
 }
 
 func isHost(fp fileProfile) bool { return fp.Runtime == "" || fp.Runtime == "host" }
