@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/loadkpi/baton/foundation/atomicfile"
 	"github.com/loadkpi/baton/foundation/filelock"
 )
 
@@ -103,6 +104,58 @@ func Remove(path string, confirm func() (bool, error)) (size int64, removed bool
 		return 0, false, err
 	}
 	return info.Size(), true, nil
+}
+
+// Rewrite passes each complete line of the file at path to edit, and when edit
+// says it changed any, replaces the file with the edited lines: a temporary
+// file in the same directory, with the permission bits of the file, renamed
+// over it. It runs under the lock Append takes, so a line being appended is
+// either in the file when it is replaced, or lands in the new file (Append
+// opens the file again when it finds it replaced). Bytes after the last
+// newline are an unfinished line and are kept as they are. With dryRun nothing
+// is written. Rewrite returns how many lines edit changed. A file that is not
+// there has none and is no error.
+func Rewrite(path string, edit func(line []byte) (edited []byte, changed bool), dryRun bool) (changed int, err error) {
+	f, err := openLocked(path, os.O_RDONLY, 0)
+	if errors.Is(err, fs.ErrNotExist) {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, err
+	}
+	defer func() { _ = f.Close() }()
+
+	data, err := io.ReadAll(f)
+	if err != nil {
+		return 0, err
+	}
+	info, err := f.Stat()
+	if err != nil {
+		return 0, err
+	}
+
+	var out bytes.Buffer
+	rest := data
+	for {
+		i := bytes.IndexByte(rest, '\n')
+		if i < 0 {
+			out.Write(rest)
+			break
+		}
+		line, ok := edit(rest[:i])
+		if ok {
+			changed++
+		} else {
+			line = rest[:i]
+		}
+		out.Write(line)
+		out.WriteByte('\n')
+		rest = rest[i+1:]
+	}
+	if changed == 0 || dryRun {
+		return changed, nil
+	}
+	return changed, atomicfile.Write(path, out.Bytes(), info.Mode().Perm())
 }
 
 // Forward calls yield with each complete line of the file at path, oldest

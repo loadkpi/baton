@@ -119,6 +119,23 @@ type Storer interface {
 	// is still the record of that launch (same time), so that a newer launch
 	// is never deleted. deleted is false when it was not.
 	DeleteLaunch(ctx context.Context, l Launch) (deleted bool, err error)
+	// ScrubSession replaces the payload of every line of the Session's Event
+	// file that is an Event and for which mask says it changed, and marks the
+	// line as masked; any other line, and every other field, stay as they are.
+	// It takes the same lock as SaveEvent, writes the file anew only if a line
+	// changed, and keeps its permission bits. It returns the number of lines
+	// changed. With dryRun nothing is written.
+	ScrubSession(ctx context.Context, ref SessionRef, mask func(payload []byte) ([]byte, bool), dryRun bool) (lines int, err error)
+}
+
+// Texts is the storage of the texts that were made from Events and by hand and
+// may hold a secret: the Handoffs.
+type Texts interface {
+	// ScrubTexts replaces every text with mask(text) when that differs, in
+	// place, atomically and with the same permission bits. It returns the texts
+	// it changed (or, with dryRun, would change), and a text it could not
+	// rewrite with its Err; the others are still done.
+	ScrubTexts(ctx context.Context, mask func(text string) string, dryRun bool) ([]Scrubbed, error)
 }
 
 // SessionRef names the Event file of one Session to the storage.
@@ -148,6 +165,7 @@ type Bus struct {
 	machine  Machine
 	runtimes map[runtime.Runtime]runtimebus.Runtime
 	secrets  Secrets
+	texts    Texts
 	now      func() time.Time
 }
 
@@ -160,6 +178,12 @@ func New(storer Storer, machine Machine) *Bus {
 // payload is masked by pattern only.
 func (b *Bus) WithSecrets(secrets Secrets) *Bus {
 	b.secrets = secrets
+	return b
+}
+
+// WithTexts lets Scrub go over the Handoffs too.
+func (b *Bus) WithTexts(texts Texts) *Bus {
+	b.texts = texts
 	return b
 }
 

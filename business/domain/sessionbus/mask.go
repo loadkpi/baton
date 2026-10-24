@@ -16,6 +16,12 @@ import (
 // encoded again, so its keys may be in another order. Whatever cannot be parsed
 // is returned as it came: Record has parsed it already.
 func (b *Bus) maskPayload(ctx context.Context, payload []byte) (masked []byte, changed bool) {
+	return maskPayloadWith(b.redactor(ctx), payload)
+}
+
+// maskPayloadWith is maskPayload for a Redactor already made, which Scrub makes
+// once for all the lines.
+func maskPayloadWith(r *redact.Redactor, payload []byte) (masked []byte, changed bool) {
 	dec := json.NewDecoder(bytes.NewReader(payload))
 	dec.UseNumber() // a number keeps the digits it was written with
 	var doc any
@@ -23,7 +29,7 @@ func (b *Bus) maskPayload(ctx context.Context, payload []byte) (masked []byte, c
 		return payload, false
 	}
 
-	doc, changed = maskValue(b.redactor(ctx), doc)
+	doc, changed = maskValue(r, doc)
 	if !changed {
 		return payload, false
 	}
