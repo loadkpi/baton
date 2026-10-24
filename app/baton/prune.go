@@ -56,9 +56,11 @@ func runPrune(ctx context.Context, c console, home string, args []string) int {
 	}
 
 	bus := sessionbus.New(sessionfile.New(filepath.Join(home, ".baton")), sessionproc.New())
-	pruned, err := bus.Prune(ctx, sessions, toBusAge(days), parsed.dryRun)
-	if err != nil {
-		return c.errorf("%v", err)
+	// An error comes with what was done until then: the files already deleted
+	// are still listed below.
+	pruned, launches, pruneErr := bus.Prune(ctx, sessions, toBusAge(days), parsed.dryRun)
+	if pruneErr != nil && len(pruned) == 0 {
+		return c.errorf("%v", pruneErr)
 	}
 
 	n := sessionIDLenOf(listing.Sessions)
@@ -92,10 +94,16 @@ func runPrune(ctx context.Context, c console, home string, args []string) int {
 	case failed == 0:
 		c.println("nothing to prune")
 	}
+	if len(launches) > 0 {
+		c.println(fmt.Sprintf("removed %d launch %s", len(launches), plural(len(launches), "record")))
+	}
 	for _, p := range pruned {
 		if p.Err != nil {
 			c.errorf("cannot delete %s: %v", p.Path, toAppReason(p.Err))
 		}
+	}
+	if pruneErr != nil {
+		return c.errorf("%v", pruneErr)
 	}
 	if failed > 0 {
 		return exitError

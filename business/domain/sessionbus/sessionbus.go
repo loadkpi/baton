@@ -115,6 +115,10 @@ type Storer interface {
 	// QueryLaunches returns every launch record. A record that cannot be
 	// read is skipped.
 	QueryLaunches(ctx context.Context) ([]Launch, error)
+	// DeleteLaunch deletes the record of the launch's Project and Agent if it
+	// is still the record of that launch (same time), so that a newer launch
+	// is never deleted. deleted is false when it was not.
+	DeleteLaunch(ctx context.Context, l Launch) (deleted bool, err error)
 }
 
 // SessionRef names the Event file of one Session to the storage.

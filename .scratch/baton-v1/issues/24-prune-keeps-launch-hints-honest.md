@@ -4,10 +4,10 @@
 
 **Blocked by:** 22
 
-**Status:** open
+**Status:** done
 
-- [ ] First reproduce it at the binary seam: a Codex launch record, Events of a Session of that Project and Agent after it, the Session ended long ago; `baton ls` shows no `no_events`; `baton prune --older-than 1d` deletes the file; `baton ls` now shows `no_events` (red test), or, if it does not, say so and close the ticket with the test as a guard.
-- [ ] Fix: prune must not turn a launch that was heard from into a silent one. A launch that was already silent before the prune stays silent and stays on disk (its hint is still true). Choose the simplest way that keeps both rules and record it in `DESIGN.md` (D7 retention subsection and the Codex part that says there is no expiry): for example, removing the launch records that the prune would newly make silent, with the same lock discipline as other launch writes.
-- [ ] `--dry-run` deletes nothing, launch records included, and its output stays as it is (the launch records removed are mentioned in a line of the real run only, e.g. `removed N launch records`; the line is absent when there are none).
-- [ ] Tested at the binary seam only (AGENTS.md): the reproduction above; a launch never heard from stays flagged after a prune; a launch heard from by a Session that is not pruned (young) is untouched; `--dry-run`; host and a Project's directory.
-- [ ] `DESIGN.md` updated (the sentence in ticket 22's "what is not deleted" about launch records, which this ticket changes).
+- [x] First reproduce it at the binary seam: a Codex launch record, Events of a Session of that Project and Agent after it, the Session ended long ago; `baton ls` shows no `no_events`; `baton prune --older-than 1d` deletes the file; `baton ls` now shows `no_events` (red test), or, if it does not, say so and close the ticket with the test as a guard.
+- [x] Fix: prune must not turn a launch that was heard from into a silent one. A launch that was already silent before the prune stays silent and stays on disk (its hint is still true). Choose the simplest way that keeps both rules and record it in `DESIGN.md` (D7 retention subsection and the Codex part that says there is no expiry): for example, removing the launch records that the prune would newly make silent, with the same lock discipline as other launch writes.
+- [x] `--dry-run` deletes nothing, launch records included, and its output stays as it is (the launch records removed are mentioned in a line of the real run only, e.g. `removed N launch records`; the line is absent when there are none).
+- [x] Tested at the binary seam only (AGENTS.md): the reproduction above; a launch never heard from stays flagged after a prune; a launch heard from by a Session that is not pruned (young) is untouched; `--dry-run`; host and a Project's directory.
+- [x] `DESIGN.md` updated (the sentence in ticket 22's "what is not deleted" about launch records, which this ticket changes).

@@ -87,6 +87,31 @@ func (s *Store) QueryLaunches(_ context.Context) ([]sessionbus.Launch, error) {
 	return launches, nil
 }
 
+// DeleteLaunch deletes <project dir>/launches/<agent>.json when it holds the
+// launch l. Launch writes take no lock (they replace the file atomically), so a
+// launch that lands between the read and the remove is lost; it is a record of
+// a Codex that is only about to start, and the window is the length of a read.
+func (s *Store) DeleteLaunch(_ context.Context, l sessionbus.Launch) (bool, error) {
+	path := filepath.Join(launchDir(s.root, l.Project), l.Agent.String()+".json")
+	data, err := os.ReadFile(path)
+	if os.IsNotExist(err) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if cur, err := toBusLaunch(l.Project, data); err != nil || !cur.TS.Equal(l.TS) {
+		return false, nil
+	}
+	if err := os.Remove(path); err != nil {
+		if os.IsNotExist(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
+}
+
 func toBusLaunch(project projectname.Name, data []byte) (sessionbus.Launch, error) {
 	var fl fileLaunch
 	if err := json.Unmarshal(data, &fl); err != nil {

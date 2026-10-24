@@ -33,7 +33,13 @@ type Pruned struct {
 // writes to a new file instead (jsonl.Append). A file that cannot be deleted
 // does not stop the others: it is returned with its Err. A file that was kept
 // because of that second look is not returned.
-func (b *Bus) Prune(ctx context.Context, sessions []Session, olderThan time.Duration, dryRun bool) ([]Pruned, error) {
+//
+// A launch record that the Events of the pruned Sessions had hidden (some of
+// them were its only Events at or after it) would show as silent in `baton ls`
+// and tell the user to run /hooks for an Agent that worked, so those records
+// are deleted too and returned. A launch that was silent before stays. With
+// dryRun no record is deleted or returned.
+func (b *Bus) Prune(ctx context.Context, sessions []Session, olderThan time.Duration, dryRun bool) ([]Pruned, []Launch, error) {
 	cutoff := b.now().Add(-olderThan)
 	old := func(s Session) (bool, error) {
 		newest, ok, err := b.newestEvent(ctx, s.Ref)
@@ -46,7 +52,7 @@ func (b *Bus) Prune(ctx context.Context, sessions []Session, olderThan time.Dura
 			continue
 		}
 		if ok, err := old(s); err != nil {
-			return nil, err
+			return nil, nil, err
 		} else if !ok {
 			continue
 		}
@@ -67,7 +73,50 @@ func (b *Bus) Prune(ctx context.Context, sessions []Session, olderThan time.Dura
 		p.Size = size
 		pruned = append(pruned, p)
 	}
-	return pruned, nil
+	if dryRun {
+		return pruned, nil, nil
+	}
+	removed, err := b.pruneLaunches(ctx, sessions, pruned)
+	return pruned, removed, err
+}
+
+// pruneLaunches deletes the launch records that were heard from before the
+// prune and are not after it, judged by the Sessions whose files are still
+// there.
+func (b *Bus) pruneLaunches(ctx context.Context, sessions []Session, pruned []Pruned) ([]Launch, error) {
+	if len(pruned) == 0 {
+		return nil, nil
+	}
+	gone := make(map[Key]bool)
+	for _, p := range pruned {
+		if p.Err == nil {
+			gone[p.Session.Key()] = true
+		}
+	}
+	var left []Session
+	for _, s := range sessions {
+		if !gone[s.Key()] {
+			left = append(left, s)
+		}
+	}
+	launches, err := b.storer.QueryLaunches(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var removed []Launch
+	for _, l := range launches {
+		if !heardFrom(sessions, l) || heardFrom(left, l) {
+			continue
+		}
+		deleted, err := b.storer.DeleteLaunch(ctx, l)
+		if err != nil {
+			return removed, err
+		}
+		if deleted {
+			removed = append(removed, l)
+		}
+	}
+	return removed, nil
 }
 
 // newestEvent is the time of the newest Event of the file, whoever wrote it;
