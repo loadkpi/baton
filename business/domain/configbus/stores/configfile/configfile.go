@@ -13,6 +13,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/BurntSushi/toml"
 
@@ -48,6 +49,7 @@ type fileConfig struct {
 	Projects       map[string]fileProject `toml:"projects"`
 	Telegram       *fileTelegram          `toml:"telegram"`
 	Watch          *fileWatch             `toml:"watch"`
+	Terminal       *fileTerminal          `toml:"terminal"`
 }
 
 // fileWatch is the [watch] table. sound is decoded as it comes, so that a
@@ -55,6 +57,12 @@ type fileConfig struct {
 // command that reads the file.
 type fileWatch struct {
 	Sound any `toml:"sound"`
+}
+
+// fileTerminal is the [terminal] table. start_timeout is a string, so that a
+// number is refused with a clear message instead of a decoding error.
+type fileTerminal struct {
+	StartTimeout any `toml:"start_timeout"`
 }
 
 // fileTelegram is the [telegram] table. chat_id is a number or a string, so
@@ -164,7 +172,14 @@ func toBusConfig(fc fileConfig, home string) (configbus.Config, error) {
 	if !filepath.IsAbs(source) {
 		return configbus.Config{}, fmt.Errorf("source %q must be an absolute path (or start with ~)", fc.Source)
 	}
-	cfg := configbus.Config{Home: home, Source: source}
+	cfg := configbus.Config{Home: home, Source: source, StartTimeout: configbus.DefaultStartTimeout}
+	if fc.Terminal != nil {
+		d, err := toBusStartTimeout(*fc.Terminal)
+		if err != nil {
+			return configbus.Config{}, err
+		}
+		cfg.StartTimeout = d
+	}
 
 	names := make([]string, 0, len(fc.Profiles))
 	for name := range fc.Profiles {
@@ -253,6 +268,23 @@ func toBusWatch(fw fileWatch) (configbus.Watch, error) {
 		return configbus.Watch{}, fmt.Errorf("watch.sound: %w", err)
 	}
 	return configbus.Watch{Sound: snd}, nil
+}
+
+// toBusStartTimeout converts terminal.start_timeout, a positive Go duration
+// such as "10s". An absent key keeps the default.
+func toBusStartTimeout(ft fileTerminal) (time.Duration, error) {
+	switch v := ft.StartTimeout.(type) {
+	case nil:
+		return configbus.DefaultStartTimeout, nil
+	case string:
+		d, err := time.ParseDuration(v)
+		if err != nil || d <= 0 {
+			return 0, fmt.Errorf("terminal.start_timeout %q must be a positive duration such as \"10s\"", v)
+		}
+		return d, nil
+	default:
+		return 0, errors.New("terminal.start_timeout must be a string with a positive duration such as \"10s\"")
+	}
 }
 
 func isHost(fp fileProfile) bool { return fp.Runtime == "" || fp.Runtime == "host" }

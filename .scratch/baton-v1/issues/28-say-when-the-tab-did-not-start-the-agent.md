@@ -1,0 +1,16 @@
+# 28: Say when the tab did not start the Agent
+
+**What to build:** `baton new` and `baton handoff` notice when the command they typed into a new Guake tab never started, and say so instead of exiting 0.
+
+**Blocked by:** 06, 27
+
+**Status:** done
+
+**Why (found in ticket 27, on a real desktop).** Guake's `-e` creates a new tab and feeds the line into its pty at once (Guake 3.10: the D-Bus method `execute_command` is `add_tab()` then `feed_child()`; `execute_command_by_uuid` exists in the app but is not exported over D-Bus, so there is no way to type into a tab later). The line therefore races with the start of the user's interactive shell. Any startup code that reads the terminal eats it. Seen live: oh-my-zsh's `dotenv` plugin, in a directory with a `.env` not yet allowed, sends `ESC[6n` and runs `read -d R` on `/dev/tty`, which swallowed `cd <dir> && env -u ANTHR` and left `OPIC_API_KEY ...` to run as a command (`command not found`); `baton new` still exited 0 and the tab never got an Agent. Guake opens the new tab in the current tab's directory, so whether it happens depends on where the user's current tab is. The race cannot be removed while Baton types into Guake; the real cure is a Terminal that runs the command directly (tmux, D8, v2). This ticket makes the failure visible.
+
+- [x] After `guake -e`, Baton waits until the launched program shows up, at most a start timeout (default 10 s). "Shows up" means: a process of the same user whose working directory is the tab's directory, whose command name is one the Runtime expects for that launch, and which started after the `guake` call. Each Runtime says which names to expect (host: the Agent's binary, because `env` execs it; sandbox: what `run.sh` and the `docker` it runs show; Compose: `docker`); this goes into `runtimebus.Tab` (for example `Expect []string`), not into the Terminal.
+- [x] Found → as today (exit 0). Not found in time → stderr names the tab title, says the command did not start in the new Guake tab, that something in the shell's startup may have read the terminal (for example oh-my-zsh `dotenv` asking about a `.env`), and that the user can run the line by hand in that tab or try again; exit 1. The line itself is printed so it can be pasted (it holds no secrets: API keys are removed with `env -u`, never set).
+- [x] `baton handoff`: the same check after it opens the receiving tab; the Handoff file is already written by then and stays, and the message says where it is.
+- [x] The start timeout is configurable for tests and slow machines: `[terminal] start_timeout = "10s"` in the config (Go duration, positive). Recorded in DESIGN.md's config section.
+- [x] Tested at the binary seam: the `guake` stub gains a mode that runs the `-e` line detached in its own process group (so the stub `claude`/`docker` runs as a real process with the right cwd), and the default mode that runs nothing. Cases: host launch found; host launch not found (short timeout, message, exit 1, the line in the message); a process with the expected name in another directory does not count; a sandbox and a Compose launch found; `baton handoff` not found keeps the Handoff and says so.
+- [x] DESIGN.md D8: the race, the live evidence above, why waiting before typing is not possible with Guake's interface, and the check. README: the known limitation in one sentence next to `baton new`.

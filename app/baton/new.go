@@ -14,6 +14,7 @@ import (
 	"github.com/loadkpi/baton/business/domain/configbus/stores/configfile"
 	"github.com/loadkpi/baton/business/domain/launchbus"
 	"github.com/loadkpi/baton/business/domain/launchbus/stores/launchguake"
+	"github.com/loadkpi/baton/business/domain/launchbus/stores/launchproc"
 	"github.com/loadkpi/baton/business/domain/projectbus"
 	"github.com/loadkpi/baton/business/domain/projectbus/stores/projectfile"
 	"github.com/loadkpi/baton/business/domain/runtimebus"
@@ -78,7 +79,7 @@ func runNew(ctx context.Context, c console, home string, args []string) int {
 	req := launchbus.Request{Home: home, Place: place, Task: task, Agent: a, Profile: profile}
 	batonDir := filepath.Join(home, ".baton")
 	sessions := sessionbus.New(sessionfile.New(batonDir), sessionproc.New())
-	if err := launchbus.New(launchguake.New(), newWorkBus(home, cfg), sessions, startable(home, cfg, c.stderr)).Start(ctx, req); err != nil {
+	if err := launchbus.New(launchguake.New(), launchproc.New(), cfg.StartTimeout, newWorkBus(home, cfg), sessions, startable(home, cfg, c.stderr)).Start(ctx, req); err != nil {
 		return c.errorf("%v", err)
 	}
 	return exitOK

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/loadkpi/baton/business/types/agent"
 	"github.com/loadkpi/baton/business/types/profilename"
@@ -31,7 +32,14 @@ type Config struct {
 	// Telegram is where `baton watch` sends notifications while the user is
 	// away. Nil means the config has no [telegram] table.
 	Telegram *Telegram
+	// StartTimeout is how long `baton new` and `baton handoff` wait for the
+	// program of a new Guake tab to show up; DefaultStartTimeout when the
+	// config has no [terminal] table.
+	StartTimeout time.Duration
 }
+
+// DefaultStartTimeout is the start timeout of a config that sets none.
+const DefaultStartTimeout = 10 * time.Second
 
 // Telegram is the [telegram] table of the config. It holds no secret: the bot
 // token is named by TokenVar and lives in the secrets file.

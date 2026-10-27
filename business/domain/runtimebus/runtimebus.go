@@ -14,6 +14,7 @@ import (
 	"github.com/loadkpi/baton/business/types/agent"
 	"github.com/loadkpi/baton/business/types/projectname"
 	"github.com/loadkpi/baton/business/types/runtime"
+	"github.com/loadkpi/baton/foundation/shellquote"
 )
 
 // The two Baton mounts every container Runtime expects (DESIGN.md, D3). The
@@ -42,6 +43,18 @@ type Tab struct {
 	// Command is the program and its arguments, as words. The Terminal
 	// decides how to present them to its shell.
 	Command []string
+	// Expect are the names the program the tab starts shows in /proc: what
+	// the Runtime's command ends up as once the shell has run it (`env`
+	// execs the Agent, `docker` stays docker). Baton looks for a process
+	// with one of them to tell whether the command ran at all.
+	Expect []string
+}
+
+// Line is the one shell line that does what the Tab says: change into Dir and
+// run Command, quoted for a POSIX shell. It holds no secret: the Runtimes
+// remove API keys with `env -u` and never set them.
+func (t Tab) Line() string {
+	return "cd " + shellquote.Join([]string{t.Dir}) + " && " + shellquote.Join(t.Command)
 }
 
 // StartRequest asks a Runtime to start an Agent for a Session.

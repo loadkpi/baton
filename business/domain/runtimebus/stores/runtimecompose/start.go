@@ -215,7 +215,7 @@ func (r *Runtime) Start(ctx context.Context, req runtimebus.StartRequest) (runti
 	}
 
 	title := req.Project.String() + "/" + req.Task + ":" + req.Agent.String()
-	return runtimebus.Tab{Dir: req.WorkingCopy, Title: title, Command: words}, nil
+	return runtimebus.Tab{Dir: req.WorkingCopy, Title: title, Command: words, Expect: []string{"docker"}}, nil
 }
 
 func filesFlags(files []string) []string {

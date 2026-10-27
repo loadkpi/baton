@@ -57,7 +57,7 @@ func (*Runtime) Start(_ context.Context, r runtimebus.StartRequest) (runtimebus.
 	}
 
 	title := r.Project.String() + "/" + r.Task + ":" + r.Agent.String()
-	return runtimebus.Tab{Dir: r.WorkingCopy, Title: title, Command: command}, nil
+	return runtimebus.Tab{Dir: r.WorkingCopy, Title: title, Command: command, Expect: []string{r.Agent.Binary()}}, nil
 }
 
 // isDefaultDir is true for the Profile at ~/.claude, which Claude Code uses

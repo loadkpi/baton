@@ -28,6 +28,9 @@ type Env struct {
 	stubDir  string
 	sysDirs  []string // the system directories of PATH, after the stubs
 	callsDir string
+	// procsDir holds what the guake stub starts: copies of sleep under the
+	// names of programs, and the list of the processes to kill.
+	procsDir string
 	// containers are the fake Compose containers of AddContainer.
 	containers     []*Container
 	missingVolumes []string
@@ -50,7 +53,9 @@ func New(t *testing.T, bin string) *Env {
 		stubDir:   filepath.Join(root, "stubs"),
 		sysDirs:   []string{"/usr/bin", "/bin"},
 		callsDir:  filepath.Join(root, "calls"),
+		procsDir:  filepath.Join(root, "procs"),
 	}
+	t.Cleanup(e.killStubProcesses)
 	for _, d := range []string{e.Home, e.SourceDir, e.stubDir, e.callsDir} {
 		if err := os.MkdirAll(d, 0o755); err != nil {
 			t.Fatal(err)
@@ -60,6 +65,7 @@ func New(t *testing.T, bin string) *Env {
 	for _, name := range defaultStubs {
 		e.Stub(name)
 	}
+	e.Stub("guake", e.GuakeStarts("claude", "codex", "docker"))
 	return e
 }
 

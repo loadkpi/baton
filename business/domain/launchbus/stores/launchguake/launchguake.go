@@ -12,7 +12,6 @@ import (
 	"strings"
 
 	"github.com/loadkpi/baton/business/domain/runtimebus"
-	"github.com/loadkpi/baton/foundation/shellquote"
 )
 
 // Terminal opens tabs in the running Guake.
@@ -31,8 +30,7 @@ func New() *Terminal {
 // tab. The line is typed into the tab's interactive shell, so it is one shell
 // line, quoted for it, that first changes into tab.Dir.
 func (t *Terminal) OpenTab(ctx context.Context, tab runtimebus.Tab) error {
-	line := "cd " + shellquote.Join([]string{tab.Dir}) + " && " + shellquote.Join(tab.Command)
-	return guake(ctx, "-e", line, "-r", tab.Title)
+	return guake(ctx, "-e", tab.Line(), "-r", tab.Title)
 }
 
 func guake(ctx context.Context, args ...string) error {

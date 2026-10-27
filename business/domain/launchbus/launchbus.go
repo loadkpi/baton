@@ -26,6 +26,20 @@ type Terminal interface {
 	OpenTab(ctx context.Context, tab runtimebus.Tab) error
 }
 
+// Processes tells whether the program of a tab is running. Guake types the
+// line into the shell of the new tab and says nothing about what happened to
+// it, so the only witness is the process table (DESIGN.md, D8).
+type Processes interface {
+	// Now is the current time on the clock of the start times of processes.
+	Now() (uint64, error)
+	// Started tells whether a process of the user runs in dir under one of
+	// names and started at or after since, a value of Now.
+	Started(dir string, names []string, since uint64) (bool, error)
+}
+
+// pollInterval is how often the process table is looked at while waiting.
+const pollInterval = 50 * time.Millisecond
+
 // Request asks for a new Session.
 type Request struct {
 	// Home is the home directory of the user.
@@ -44,16 +58,19 @@ type Request struct {
 // Bus is the domain of starting Sessions.
 type Bus struct {
 	terminal Terminal
+	procs    Processes
+	timeout  time.Duration
 	work     *workbus.Bus
 	sessions *sessionbus.Bus
 	runtimes map[runtime.Runtime]runtimebus.Runtime
 }
 
-// New creates the domain over a Terminal, the domain that decides the Task, the
+// New creates the domain over a Terminal, the means to see that its program
+// started (waited for at most timeout), the domain that decides the Task, the
 // Sessions (where launches are remembered) and the Runtimes that can start an
 // Agent. A Project whose Runtime is not among them is refused.
-func New(terminal Terminal, work *workbus.Bus, sessions *sessionbus.Bus, runtimes map[runtime.Runtime]runtimebus.Runtime) *Bus {
-	return &Bus{terminal: terminal, work: work, sessions: sessions, runtimes: runtimes}
+func New(terminal Terminal, procs Processes, timeout time.Duration, work *workbus.Bus, sessions *sessionbus.Bus, runtimes map[runtime.Runtime]runtimebus.Runtime) *Bus {
+	return &Bus{terminal: terminal, procs: procs, timeout: timeout, work: work, sessions: sessions, runtimes: runtimes}
 }
 
 // Check refuses a request that Start could never carry out, without changing
@@ -155,8 +172,8 @@ func (b *Bus) Start(ctx context.Context, r Request) error {
 	if err != nil {
 		return err
 	}
-	if err := b.terminal.OpenTab(ctx, tab); err != nil {
-		return fmt.Errorf("open a tab for %s: %w", tab.Title, err)
+	if err := b.openTab(ctx, tab); err != nil {
+		return err
 	}
 	// Codex runs Baton's hooks only after the user trusted them, so a Codex
 	// that Baton started can stay silent for good. Remembering the launch is
@@ -166,6 +183,42 @@ func (b *Bus) Start(ctx context.Context, r Request) error {
 		return b.recordLaunch(ctx, began, project.Name, project.Runtime, r.Profile, task.Label(), tab.Title, r.Agent)
 	}
 	return nil
+}
+
+// openTab opens the tab and waits until the program it was told to run shows
+// up: a process of the same user, in the tab's directory, under a name the
+// Runtime expects, that started after the Terminal was asked. Without it a line
+// that the new shell swallowed (DESIGN.md, D8) would go unnoticed.
+func (b *Bus) openTab(ctx context.Context, tab runtimebus.Tab) error {
+	since, err := b.procs.Now()
+	if err != nil {
+		return fmt.Errorf("read the clock of the process table: %w", err)
+	}
+	if err := b.terminal.OpenTab(ctx, tab); err != nil {
+		return fmt.Errorf("open a tab for %s: %w", tab.Title, err)
+	}
+	deadline := time.NewTimer(b.timeout)
+	defer deadline.Stop()
+	tick := time.NewTicker(pollInterval)
+	defer tick.Stop()
+	for {
+		found, err := b.procs.Started(tab.Dir, tab.Expect, since)
+		if err != nil {
+			return fmt.Errorf("the tab %s is open, but looking for its program failed: %w", tab.Title, err)
+		}
+		if found {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-deadline.C:
+			return fmt.Errorf("the command did not start in the new Guake tab %s within %s.\n"+
+				"Something in the shell's startup may have read the terminal (for example the oh-my-zsh dotenv plugin asking about a .env file).\n"+
+				"Run this line by hand in that tab, or try again:\n%s", tab.Title, b.timeout, tab.Line())
+		case <-tick.C:
+		}
+	}
 }
 
 // recordLaunch remembers a launch under the Profile the Session was started

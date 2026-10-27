@@ -19,6 +19,7 @@ import (
 	"github.com/loadkpi/baton/business/domain/handoffbus/stores/handofffile"
 	"github.com/loadkpi/baton/business/domain/launchbus"
 	"github.com/loadkpi/baton/business/domain/launchbus/stores/launchguake"
+	"github.com/loadkpi/baton/business/domain/launchbus/stores/launchproc"
 	"github.com/loadkpi/baton/business/domain/sessionbus"
 	"github.com/loadkpi/baton/business/domain/sessionbus/stores/sessionfile"
 	"github.com/loadkpi/baton/business/domain/sessionbus/stores/sessionproc"
@@ -186,6 +187,6 @@ func newHandoffBus(home string, cfg configbus.Config, log io.Writer) *handoffbus
 	batonDir := filepath.Join(home, ".baton")
 	work := newWorkBus(home, cfg)
 	sessions := sessionbus.New(sessionfile.New(batonDir), sessionproc.New()).WithRuntimes(runtimes(home, cfg))
-	launch := launchbus.New(launchguake.New(), work, sessions, startable(home, cfg, log))
+	launch := launchbus.New(launchguake.New(), launchproc.New(), cfg.StartTimeout, work, sessions, startable(home, cfg, log))
 	return handoffbus.New(handofffile.New(batonDir), work, newProjects(home, cfg), taskbus.New(taskfile.New(batonDir)), sessions, launch, runtimes(home, cfg), handoffInterval)
 }

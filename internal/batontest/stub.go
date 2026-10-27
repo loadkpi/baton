@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"sort"
 	"strconv"
+	"strings"
+	"syscall"
 )
 
 // defaultStubs are the external programs of the outside world. Every Env
@@ -172,4 +174,81 @@ func (e *Env) callDir(name string) string {
 
 func shellQuote(s string) string {
 	return "'" + string(bytes.ReplaceAll([]byte(s), []byte("'"), []byte(`'\''`))) + "'"
+}
+
+// The guake stub plays what Guake does to the command it is given with -e: it
+// types the line into the shell of a new tab, which starts the program a moment
+// later. The stub starts processes in the background, detached (own session,
+// stdin and output from /dev/null, so that no pipe of the test stays open), and
+// every one of them is killed when the test ends. A process of the stub is the
+// real thing for Baton, which looks for it in /proc.
+//
+// A bare `env.Stub("guake")` records the call and starts nothing, the tab in
+// which the line never ran. Every Env starts with GuakeStarts of the programs
+// the Runtimes launch (claude, codex and docker), so that a launch is found
+// unless a test says otherwise.
+
+// GuakeStarts makes the guake stub start a process called each of names, in
+// the directory the -e line changes into, for every call with -e. Each process
+// is a copy of sleep(1) under that name, so that its name in /proc is the name.
+func (e *Env) GuakeStarts(names ...string) StubOption {
+	return WithScript(e.guakeScript(`dir=$(sh -c "${line%% && *} && pwd -P")`, names))
+}
+
+// GuakeStartsIn is GuakeStarts in a fixed directory instead of the one the line
+// changes into: a program that has the right name but is not in the tab.
+func (e *Env) GuakeStartsIn(dir string, names ...string) StubOption {
+	return WithScript(e.guakeScript("dir="+shellQuote(dir), names))
+}
+
+// GuakeRunsLine makes the guake stub run the -e line in a shell, as the shell
+// of a tab would, so that the programs on the PATH of the Env (the stubs of
+// claude, codex and docker) run as real processes in the directory the line
+// changes into. A stub that has to stay alive long enough to be found says
+// so itself, for example batontest.WithScript("sleep 30").
+func (e *Env) GuakeRunsLine() StubOption {
+	return WithScript(e.guakeScript("", nil))
+}
+
+func (e *Env) guakeScript(dir string, names []string) string {
+	procs := shellQuote(e.procsDir)
+	var b strings.Builder
+	fmt.Fprintf(&b, `procs=%s
+mkdir -p "$procs/bin"
+line=
+while [ "$#" -gt 0 ]; do
+  [ "$1" = -e ] && line=$2
+  shift
+done
+[ -n "$line" ] || exit 0
+`, procs)
+	if len(names) == 0 {
+		b.WriteString(`(setsid sh -c "$line" </dev/null >/dev/null 2>&1 & echo $! >> "$procs/pids")
+`)
+		return b.String()
+	}
+	b.WriteString(dir + "\n")
+	fmt.Fprintf(&b, `for name in %s; do
+  if [ ! -x "$procs/bin/$name" ]; then
+    cp "$(command -v sleep)" "$procs/bin/.$name.$$" && mv "$procs/bin/.$name.$$" "$procs/bin/$name"
+  fi
+  (cd "$dir" && setsid "$procs/bin/$name" 60 </dev/null >/dev/null 2>&1 & echo $! >> "$procs/pids")
+done
+`, strings.Join(names, " "))
+	return b.String()
+}
+
+// killStubProcesses kills the processes (and their process groups) that the
+// guake stub started.
+func (e *Env) killStubProcesses() {
+	data, err := os.ReadFile(filepath.Join(e.procsDir, "pids"))
+	if err != nil {
+		return
+	}
+	for _, field := range strings.Fields(string(data)) {
+		if pid, err := strconv.Atoi(field); err == nil && pid > 1 {
+			_ = syscall.Kill(-pid, syscall.SIGKILL)
+			_ = syscall.Kill(pid, syscall.SIGKILL)
+		}
+	}
 }

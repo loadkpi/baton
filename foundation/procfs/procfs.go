@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"syscall"
 )
 
 // Process is what /proc tells about one process.
@@ -121,4 +122,88 @@ func ContainerID(mountinfo, cgroup string) string {
 		}
 	}
 	return ""
+}
+
+// ClockTicksPerSecond is the unit of Process.Start. It is USER_HZ, which is 100
+// on every Linux architecture Baton runs on [unverified: sysconf(_SC_CLK_TCK)
+// is not called, because the standard library cannot and cgo is off].
+const ClockTicksPerSecond = 100
+
+// Now is the current time on the clock that Process.Start uses: clock ticks
+// since boot, read from /proc/uptime (which has two decimals). A process that
+// started after a moment has a Start of at least Now() read at that moment.
+func Now() (uint64, error) {
+	data, err := os.ReadFile("/proc/uptime")
+	if err != nil {
+		return 0, err
+	}
+	fields := strings.Fields(string(data))
+	if len(fields) == 0 {
+		return 0, fmt.Errorf("/proc/uptime: unexpected format %q", data)
+	}
+	seconds, fraction, _ := strings.Cut(fields[0], ".")
+	whole, err := strconv.ParseUint(seconds, 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("/proc/uptime: %w", err)
+	}
+	// Two decimals are hundredths of a second, which are ticks at 100 Hz.
+	hundredths := uint64(0)
+	if fraction != "" {
+		if len(fraction) > 2 {
+			fraction = fraction[:2]
+		}
+		if hundredths, err = strconv.ParseUint(fraction, 10, 64); err != nil {
+			return 0, fmt.Errorf("/proc/uptime: %w", err)
+		}
+		if len(fraction) == 1 {
+			hundredths *= 10
+		}
+	}
+	return whole*ClockTicksPerSecond + hundredths*ClockTicksPerSecond/100, nil
+}
+
+// Detail is what /proc tells about a process beyond Process, for finding the
+// process a tab started.
+type Detail struct {
+	Process
+	// Cwd is the working directory; empty when it cannot be read.
+	Cwd string
+	// Args are the words of the command line (argv); empty for a kernel
+	// thread or when unreadable.
+	Args []string
+	// UID is the owner of the process.
+	UID int
+}
+
+// ReadAll returns every process that can be read. A process that disappears
+// while the list is read, or whose stat file cannot be parsed, is left out.
+func ReadAll() ([]Detail, error) {
+	entries, err := os.ReadDir("/proc")
+	if err != nil {
+		return nil, err
+	}
+	var out []Detail
+	for _, entry := range entries {
+		pid, err := strconv.Atoi(entry.Name())
+		if err != nil {
+			continue
+		}
+		p, err := Read(pid)
+		if err != nil {
+			continue
+		}
+		d := Detail{Process: p, UID: -1}
+		dir := filepath.Join("/proc", entry.Name())
+		if info, err := os.Stat(dir); err == nil {
+			if st, ok := info.Sys().(*syscall.Stat_t); ok {
+				d.UID = int(st.Uid)
+			}
+		}
+		d.Cwd, _ = os.Readlink(filepath.Join(dir, "cwd"))
+		if raw, err := os.ReadFile(filepath.Join(dir, "cmdline")); err == nil {
+			d.Args = strings.Split(strings.TrimSuffix(string(raw), "\x00"), "\x00")
+		}
+		out = append(out, d)
+	}
+	return out, nil
 }
