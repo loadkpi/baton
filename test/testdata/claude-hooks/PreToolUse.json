@@ -1,17 +1,18 @@
 {
-  "session_id": "abc123",
-  "prompt_id": "550e8400-e29b-41d4-a716-446655440000",
-  "transcript_path": "/home/user/.claude/projects/.../transcript.jsonl",
-  "cwd": "/home/user/my-project",
-  "scratchpad_dir": "/tmp/claude-1000/-home-user-my-project/abc123/scratchpad",
-  "permission_mode": "default",
+  "session_id": "536bfd03-e041-485e-878b-7bd28786fad3",
+  "transcript_path": "/home/user/.claude/projects/-home-user-trial-app/536bfd03-e041-485e-878b-7bd28786fad3.jsonl",
+  "cwd": "/home/user/trial-app",
+  "scratchpad_dir": "/tmp/claude-1000/-home-user-trial-app/536bfd03-e041-485e-878b-7bd28786fad3/scratchpad",
+  "prompt_id": "417741a0-b275-4569-bfa3-93f100c51e26",
+  "permission_mode": "auto",
+  "effort": {
+    "level": "medium"
+  },
   "hook_event_name": "PreToolUse",
   "tool_name": "Bash",
   "tool_input": {
-    "command": "npm test",
-    "description": "Run test suite",
-    "timeout": 120000,
-    "run_in_background": false
+    "command": "ls -la",
+    "description": "List files in current directory"
   },
-  "tool_use_id": "toolu_01ABC123..."
+  "tool_use_id": "toolu_01VyBkYx4dxHBX2Y64FSvfmb"
 }

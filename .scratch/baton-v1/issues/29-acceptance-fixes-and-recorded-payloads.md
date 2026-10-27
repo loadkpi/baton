@@ -1,0 +1,13 @@
+# 29: Acceptance fixes and recorded hook payloads
+
+**What to build:** what ticket 27 found on a real desktop that is small enough to fix at once, and the Claude Code hook fixtures replaced with payloads recorded from a live Claude Code 2.1.311.
+
+**Blocked by:** 27, 28
+
+**Status:** done
+
+- [x] **Recorded payloads.** Replace `test/testdata/claude-hooks/{SessionStart,UserPromptSubmit,PreToolUse,PostToolUse,Stop,SessionEnd,PermissionRequest}.json` with the recordings the lead prepared (already scrubbed of private paths: `cwd` is `/home/user/trial-app`, `transcript_path` and `scratchpad_dir` are neutral). `PostToolUseFailure.json` stays from the docs (not seen live). Rewrite the folder's README: which files are recordings (Claude Code 2.1.311, Oct 27, 2026, Linux, a throwaway Profile, `permission_mode` `auto` except `PermissionRequest`, which was `default`), which one is still from the docs, what was changed by hand (paths), and that live payloads carry fields the docs did not show (`prompt_id`, `effort`, `scratchpad_dir`; `SessionStart` has no `context_tokens` etc. here). Update expected values in tests that relied on the old content; do not weaken what a test checks (a masking test that needs a secret in a command keeps its own payload, built in the test).
+- [x] **No narrative twice in a Handoff.** The `/baton-handoff` skill pipes the narrative into `baton handoff save` with a heredoc, so that Bash command is one of the "Last commands" and the whole narrative is printed again in the Facts part (seen live). Leave out of the list every command that runs `baton handoff save` (whatever path the binary is called by: `/baton/bin/baton`, `~/.baton/bin/baton`, `"$BATON"` set by the skill's snippet, plain `baton`). Say in DESIGN.md D5 how such a command is recognised. The list still holds up to 10 other commands.
+- [x] **The Handoff's heading names the Task as `baton ls` does.** Live: `# Handoff 1 of trial-app/2026-10-27-3` for a Task named `handoff`. The heading uses the Task's name when it has one (`trial-app/handoff`); the front matter keeps the id (`task: trial-app/2026-10-27-3`), so links and lookups do not change.
+- [x] **`baton watch` says "finishing the notification being sent" only when one is.** Live, `systemctl --user restart baton-watch` logged `stopping: finishing the notification being sent (signal again to stop at once)` with nothing in flight. With nothing being sent it stops at once with a plain line (or none); the two-signal behaviour while a notification is in flight stays as it is.
+- [x] Tests at the binary seam for the three fixes; DESIGN.md updated where the behaviour is described. Do not edit the README's "Checked for real" column or ticket 27: the lead does.

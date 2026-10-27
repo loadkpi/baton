@@ -3,6 +3,7 @@ package handoffbus
 import (
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 
@@ -74,7 +75,9 @@ func (d document) render() []byte {
 	fmt.Fprintf(&b, "created: %s\n", d.Created.UTC().Format(time.RFC3339))
 	b.WriteString("---\n\n")
 
-	fmt.Fprintf(&b, "# Handoff %d of %s\n\n", d.Number, label)
+	// The heading names the Task as `baton ls` does; the header keeps the id.
+	title := d.Project + "/" + orElse(d.TaskName, d.Task)
+	fmt.Fprintf(&b, "# Handoff %d of %s\n\n", d.Number, title)
 	b.WriteString("## Facts\n\n")
 	b.WriteString("Taken by `baton handoff` after the handing-over Session ended.\n\n")
 	fmt.Fprintf(&b, "- Task: %s\n", d.Task)
@@ -191,3 +194,16 @@ func truncate(s string, n int) string {
 }
 
 func isRuneStart(b byte) bool { return b&0xC0 != 0x80 }
+
+// saveCommand matches a line of a shell command that runs `baton handoff save`:
+// the command word is `baton` or a path that ends in `/baton` (or `~`), or the
+// variable the /baton-handoff skill sets (`$BATON`, `"$BATON"`, `${BATON}`), at
+// the start of a line or after `;`, `&&`, `||`, `|` or `(`; then the words
+// `handoff save`.
+var saveCommand = regexp.MustCompile(`(?m)(?:^|[;&|(])[ \t]*"?(?:\$\{?BATON\}?|[^\s"';&|()]*/baton|baton)"?[ \t]+handoff[ \t]+save(?:[ \t]|$)`)
+
+// savesNarrative says whether the command saves the narrative of a Handoff. Its
+// text is the whole narrative in a heredoc, which the Handoff holds anyway.
+func savesNarrative(c sessionbus.Command) bool {
+	return saveCommand.MatchString(c.Line)
+}

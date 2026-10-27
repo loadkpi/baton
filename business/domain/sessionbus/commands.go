@@ -49,10 +49,13 @@ type Command struct {
 //   - Codex: the shape of `tool_response` is not documented ("tool-specific
 //     output"), and the hook also runs after a command that exits non-zero, so
 //     the code is never known.
-func (b *Bus) Commands(ctx context.Context, s Session, n int) ([]Command, error) {
+//
+// A command for which skip returns true is left out and does not count towards
+// n (skip may be nil).
+func (b *Bus) Commands(ctx context.Context, s Session, n int, skip func(Command) bool) ([]Command, error) {
 	var found []Command
 	err := b.storer.QueryEventsBackward(ctx, s.Ref, func(e Event) bool {
-		if c, ok := toBusCommand(e); ok {
+		if c, ok := toBusCommand(e); ok && (skip == nil || !skip(c)) {
 			found = append(found, c)
 		}
 		return len(found) < n

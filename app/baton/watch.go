@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -82,6 +83,7 @@ func runWatch(ctx context.Context, c console, home string, args []string) int {
 	sigs := make(chan os.Signal, 1)
 	signal.Notify(sigs, os.Interrupt, syscall.SIGTERM)
 	stopping := make(chan struct{})
+	var sending atomic.Int32 // notifications being sent right now
 	finished := make(chan struct{})
 	defer close(finished)
 	defer signal.Stop(sigs)
@@ -89,7 +91,11 @@ func runWatch(ctx context.Context, c console, home string, args []string) int {
 		select {
 		case <-sigs:
 			signal.Stop(sigs)
-			c.println("stopping: finishing the notification being sent (signal again to stop at once)")
+			if sending.Load() > 0 {
+				c.println("stopping: finishing the notification being sent (signal again to stop at once)")
+			} else {
+				c.println("stopping")
+			}
 			close(stopping)
 		case <-finished:
 		}
@@ -105,7 +111,7 @@ func runWatch(ctx context.Context, c console, home string, args []string) int {
 	if err != nil {
 		return c.errorf("watch: %v", err)
 	}
-	bus := newWatchBus(home, readerConfig(ctx, c, home), desktop)
+	bus := newWatchBus(home, readerConfig(ctx, c, home), desktop, &sending)
 	warned := warnings{c: c}
 	n, ws, err := bus.Start(ctx)
 	if err != nil {
@@ -182,11 +188,24 @@ func newDesktop(c console, home string, settings watchSettings) (watchbus.Notifi
 
 // newWatchBus wires the watching domain over the files under home. The desktop
 // is the channel, and Telegram takes over while `baton away` is in force.
-func newWatchBus(home string, cfg configbus.Config, desktop watchbus.Notifier) *watchbus.Bus {
+// sending counts the notifications being sent through any channel.
+func newWatchBus(home string, cfg configbus.Config, desktop watchbus.Notifier, sending *atomic.Int32) *watchbus.Bus {
 	batonDir := filepath.Join(home, ".baton")
 	rts := runtimes(home, cfg)
 	sessions := sessionbus.New(sessionfile.New(batonDir), sessionproc.New()).WithRuntimes(rts)
 	work := workbus.New(sessions, newProjects(home, cfg), taskbus.New(taskfile.New(batonDir)), rts)
 	away := awaybus.New(awayfile.New(batonDir))
-	return watchbus.New(sessions, work, watchbus.NewRouter(desktop, telegram.New(telegramSource(home)), away))
+	return watchbus.New(sessions, work, countingNotifier{watchbus.NewRouter(desktop, telegram.New(telegramSource(home)), away), sending})
+}
+
+// countingNotifier counts the Notify calls that have not returned.
+type countingNotifier struct {
+	next    watchbus.Notifier
+	sending *atomic.Int32
+}
+
+func (n countingNotifier) Notify(ctx context.Context, m watchbus.Message) error {
+	n.sending.Add(1)
+	defer n.sending.Add(-1)
+	return n.next.Notify(ctx, m)
 }

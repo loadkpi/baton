@@ -512,7 +512,84 @@ func TestHandoff_ANamedTasksHandoffsAreKeptUnderItsIdSoRenamingItBreaksNothing(t
 	if len(dirs) != 1 || stable(dirs[0]) != "YYYY-MM-DD-1" {
 		t.Errorf("handoffs/ = %v, want one directory named after the Task's id", dirs)
 	}
-	if got := env.ReadFile(env.Path(".baton", "projects", "my-app", "handoffs", dirs[0], "1.md")); !strings.Contains(got, "- Task name: login-fix\n") {
+	got := env.ReadFile(env.Path(".baton", "projects", "my-app", "handoffs", dirs[0], "1.md"))
+	if !strings.Contains(got, "- Task name: login-fix\n") {
 		t.Errorf("handoff does not name the Task:\n%s", got)
+	}
+	// The heading names the Task as `baton ls` does; the header keeps the id.
+	if !strings.Contains(got, "\n# Handoff 1 of my-app/login-fix\n") {
+		t.Errorf("the heading does not name the Task by its name:\n%s", got)
+	}
+	if !strings.HasPrefix(got, "---\ntask: my-app/"+dirs[0]+"\nhandoff: 1\n") {
+		t.Errorf("the header does not keep the Task's id:\n%s", got)
+	}
+}
+
+func TestHandoff_TheHeadingOfAnUnnamedTaskHoldsItsId(t *testing.T) {
+	env := newEnv(t)
+	handoffProject(t, env)
+
+	env.Run("handoff", handoffTask, "--to", "claude@claude-work")
+
+	got := env.ReadFile(handoffFile(env, "1"))
+	if !strings.Contains(got, "\n# Handoff 1 of my-app/2031-03-04-1\n") {
+		t.Errorf("the heading of an unnamed Task lacks its id:\n%s", got)
+	}
+}
+
+const saveSnippet = "BATON=/baton/bin/baton\n[ -x \"$BATON\" ] || BATON=\"$HOME/.baton/bin/baton\"\n[ -x \"$BATON\" ] || BATON=\"$(command -v baton)\"\n"
+
+func TestHandoff_TheCommandThatSavesTheNarrativeIsNotAmongTheLastCommands(t *testing.T) {
+	env := newEnv(t)
+	repo := handoffProjectRunning(t, env)
+	toolEvent(t, env, repo, "2031-03-04T10:01:00Z", "PostToolUse", "go build ./...", nil)
+	saves := []string{
+		saveSnippet + "\"$BATON\" handoff save <<'NARRATIVE_END'\n## Goal\nSECRET-NARRATIVE-ONE\nNARRATIVE_END",
+		"/baton/bin/baton handoff save <<'EOF'\nSECRET-NARRATIVE-TWO\nEOF",
+		"~/.baton/bin/baton handoff save <<'EOF'\nSECRET-NARRATIVE-THREE\nEOF",
+		"cd /work && baton handoff save <<'EOF'\nSECRET-NARRATIVE-FOUR\nEOF",
+		"echo hi | ${BATON} handoff   save",
+	}
+	for i, c := range saves {
+		toolEvent(t, env, repo, "2031-03-04T10:0"+strconv.Itoa(2+i)+":00Z", "PostToolUse", c, nil)
+	}
+	toolEvent(t, env, repo, "2031-03-04T10:08:00Z", "PostToolUse", "baton handoff list", nil)
+	toolEvent(t, env, repo, "2031-03-04T10:09:00Z", "PostToolUse", "echo baton handoff save", nil)
+	endFirstSession(t, env, repo)
+
+	res := env.Run("handoff", handoffTask, "--to", "claude@claude-work")
+
+	if res.ExitCode != 0 {
+		t.Fatalf("exit code = %d, stderr=%q", res.ExitCode, res.Stderr)
+	}
+	got := env.ReadFile(handoffFile(env, "1"))
+	want := "1. exit 0, 2031-03-04T10:01:00Z\n\n```\ngo build ./...\n```\n\n" +
+		"2. exit 0, 2031-03-04T10:08:00Z\n\n```\nbaton handoff list\n```\n\n" +
+		"3. exit 0, 2031-03-04T10:09:00Z\n\n```\necho baton handoff save\n```\n"
+	if !strings.Contains(got, want) {
+		t.Errorf("handoff lacks the other commands:\n%s\nwant it to contain:\n%s", got, want)
+	}
+	if strings.Contains(got, "SECRET-NARRATIVE") || strings.Contains(got, "handoff save <<") {
+		t.Errorf("a command that saves the narrative is listed:\n%s", got)
+	}
+}
+
+func TestHandoff_TenOtherCommandsAreStillListedWhenSavesComeLast(t *testing.T) {
+	env := newEnv(t)
+	repo := handoffProjectRunning(t, env)
+	for i := 1; i <= 12; i++ {
+		toolEvent(t, env, repo, "2031-03-04T10:"+strconv.Itoa(10+i)+":00Z", "PostToolUse", "step-"+strconv.Itoa(i), nil)
+	}
+	toolEvent(t, env, repo, "2031-03-04T10:40:00Z", "PostToolUse", "/baton/bin/baton handoff save <<'EOF'\nx\nEOF", nil)
+	endFirstSession(t, env, repo)
+
+	env.Run("handoff", handoffTask, "--to", "claude@claude-work")
+
+	got := env.ReadFile(handoffFile(env, "1"))
+	for i := 1; i <= 12; i++ {
+		has := strings.Contains(got, "\nstep-"+strconv.Itoa(i)+"\n")
+		if want := i >= 3; has != want {
+			t.Errorf("step-%d listed = %v, want %v", i, has, want)
+		}
 	}
 }

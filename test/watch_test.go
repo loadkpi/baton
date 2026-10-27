@@ -537,6 +537,38 @@ func TestWatch_AStopLetsTheTelegramMessageBeingSentFinish(t *testing.T) {
 	}
 }
 
+func TestWatch_AStopWithNothingBeingSentDoesNotSayItIsFinishingANotification(t *testing.T) {
+	env := newEnv(t)
+	repo, p := watchRepo(t, env)
+	hostEvent(t, env, "s1", "2031-03-04T10:00:00Z", "SessionStart", repo, p)
+	w := startWatch(t, env)
+
+	res := w.Stop()
+
+	if res.ExitCode != 0 {
+		t.Errorf("exit code = %d, want 0; stderr=%q", res.ExitCode, res.Stderr)
+	}
+	if got, want := res.Stdout, "watching 1 sessions every 50ms\nstopping\n"; got != want {
+		t.Errorf("stdout = %q, want %q", got, want)
+	}
+}
+
+func TestWatch_AStopWhileANotificationIsBeingSentSaysSo(t *testing.T) {
+	env := newEnv(t)
+	repo, p := watchRepo(t, env)
+	slowDesktop(env)
+	hostEvent(t, env, "s1", "2031-03-04T10:00:00Z", "SessionStart", repo, p)
+	w := startWatch(t, env)
+	hostEvent(t, env, "s1", "2031-03-04T10:00:05Z", "PermissionRequest", repo, p)
+	notifications(t, env, 1)
+
+	res := w.Stop()
+
+	if !strings.Contains(res.Stdout, "stopping: finishing the notification being sent (signal again to stop at once)\n") {
+		t.Errorf("stdout = %q, want the line that says a notification is being sent", res.Stdout)
+	}
+}
+
 func TestWatch_ASecondSignalEndsTheWatcherAtOnce(t *testing.T) {
 	env := newEnv(t)
 	repo, p := watchRepo(t, env)

@@ -214,7 +214,7 @@ func (b *Bus) Complete(ctx context.Context, p *Plan) (Result, error) {
 	if !ok {
 		return Result{}, fmt.Errorf("task %s/%s has no Session to hand over", project.Name, p.task.Label())
 	}
-	commands, err := b.sessions.Commands(ctx, from.Session, commandCount)
+	commands, err := b.sessions.Commands(ctx, from.Session, commandCount, savesNarrative)
 	if err != nil {
 		return Result{}, err
 	}

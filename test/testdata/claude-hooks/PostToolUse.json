@@ -1,18 +1,26 @@
 {
-  "session_id": "abc123",
-  "transcript_path": "/Users/.../.claude/projects/.../00893aaf-19fa-41d2-8238-13269b9b3ca0.jsonl",
-  "cwd": "/Users/...",
-  "permission_mode": "default",
+  "session_id": "536bfd03-e041-485e-878b-7bd28786fad3",
+  "transcript_path": "/home/user/.claude/projects/-home-user-trial-app/536bfd03-e041-485e-878b-7bd28786fad3.jsonl",
+  "cwd": "/home/user/trial-app",
+  "scratchpad_dir": "/tmp/claude-1000/-home-user-trial-app/536bfd03-e041-485e-878b-7bd28786fad3/scratchpad",
+  "prompt_id": "417741a0-b275-4569-bfa3-93f100c51e26",
+  "permission_mode": "auto",
+  "effort": {
+    "level": "medium"
+  },
   "hook_event_name": "PostToolUse",
-  "tool_name": "Write",
+  "tool_name": "Bash",
   "tool_input": {
-    "file_path": "/path/to/file.txt",
-    "content": "file content"
+    "command": "ls -la",
+    "description": "List files in current directory"
   },
   "tool_response": {
-    "filePath": "/path/to/file.txt",
-    "type": "create"
+    "stdout": "total 16\ndrwxrwxr-x 3 user user 4096 окт 27 16:28 .\ndrwx------ 5 user user 4096 окт 27 16:35 ..\ndrwxrwxr-x 9 user user 4096 окт 27 16:28 .git\n-rw-rw-r-- 1 user user   12 окт 27 16:28 README.md",
+    "stderr": "",
+    "interrupted": false,
+    "isImage": false,
+    "noOutputExpected": false
   },
-  "tool_use_id": "toolu_01ABC123...",
-  "duration_ms": 12
+  "tool_use_id": "toolu_01VyBkYx4dxHBX2Y64FSvfmb",
+  "duration_ms": 636
 }
