@@ -64,20 +64,31 @@ func runSessionEnd(ctx context.Context, c console, home string, args []string) i
 		return sessionNotResolved(c, listing.Sessions, err)
 	}
 
+	msg, err := endSession(ctx, home, target, parsed.force)
+	if err != nil {
+		return c.errorf("%v", err)
+	}
+	c.println(msg)
+	return exitOK
+}
+
+// endSession ends the Session the way `baton session end` does and returns
+// what to tell the user. A Session that has already ended is not an error. A
+// running one is refused unless force is set, with the message that says how
+// to go on.
+func endSession(ctx context.Context, home string, target sessionbus.Session, force bool) (string, error) {
 	bus := sessionbus.New(sessionfile.New(filepath.Join(home, ".baton")), sessionproc.New())
-	err = bus.End(ctx, target, parsed.force)
+	err := bus.End(ctx, target, force)
 	var running *sessionbus.RunningError
 	switch {
 	case errors.Is(err, sessionbus.ErrAlreadyEnded):
-		c.println("session " + target.SessionID + " has already ended")
-		return exitOK
+		return "session " + target.SessionID + " has already ended", nil
 	case errors.As(err, &running):
-		return c.errorf("%v; quit that Agent yourself, or pass --force to end the Session anyway (baton never kills a process)", err)
+		return "", fmt.Errorf("%v; quit that Agent yourself, or pass --force to end the Session anyway (baton never kills a process)", err)
 	case err != nil:
-		return c.errorf("%v", err)
+		return "", err
 	}
-	c.println("ended session " + target.SessionID)
-	return exitOK
+	return "ended session " + target.SessionID, nil
 }
 
 // sessionNotResolved reports an id that names no Session or several, listing

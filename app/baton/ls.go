@@ -74,6 +74,10 @@ type line struct {
 	at    time.Time
 	cells []string
 	hint  string
+	// Exactly one of these is set: the Session the row shows, or the launch
+	// that no Event has followed.
+	placed *workbus.Placed
+	launch *sessionbus.Launch
 }
 
 // toAppLines converts the Sessions, and the launches that no Event followed, to
@@ -81,11 +85,13 @@ type line struct {
 func toAppLines(l workbus.Listing) []line {
 	lines := make([]line, 0, len(l.Sessions)+len(l.Silent))
 	n := sessionIDLenOf(l.Sessions)
-	for _, p := range l.Sessions {
-		lines = append(lines, line{at: p.Session.Since, cells: toAppSessionRow(p, n)})
+	for i := range l.Sessions {
+		p := &l.Sessions[i]
+		lines = append(lines, line{at: p.Session.Since, cells: toAppSessionRow(*p, n), placed: p})
 	}
-	for _, s := range l.Silent {
-		lines = append(lines, line{at: s.TS, cells: toAppLaunchRow(s), hint: toAppLaunchHint(s)})
+	for i := range l.Silent {
+		s := &l.Silent[i]
+		lines = append(lines, line{at: s.TS, cells: toAppLaunchRow(*s), hint: toAppLaunchHint(*s), launch: s})
 	}
 	sort.SliceStable(lines, func(i, j int) bool { return lines[i].at.After(lines[j].at) })
 	return lines

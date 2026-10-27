@@ -14,7 +14,7 @@ import (
 // defaultStubs are the external programs of the outside world. Every Env
 // installs a recording stub for each of them, so a test can never reach the
 // real program even though the real ones exist on the machine.
-var defaultStubs = []string{"guake", "docker", "notify-send", "systemctl", "claude", "codex", "pw-play", "paplay"}
+var defaultStubs = []string{"guake", "gdbus", "docker", "notify-send", "systemctl", "claude", "codex", "pw-play", "paplay"}
 
 // Call is one recorded invocation of a stub executable.
 type Call struct {
@@ -251,4 +251,26 @@ func (e *Env) killStubProcesses() {
 			_ = syscall.Kill(pid, syscall.SIGKILL)
 		}
 	}
+}
+
+// GdbusTabs makes the gdbus stub answer for Guake's D-Bus interface with tabs
+// that have the given titles, in order: get_tab_count with `(N,)`,
+// get_tab_name <i> with `('title',)`, and nothing for the rest (select_tab,
+// show). Every call is recorded: the arguments of `select_tab 1` are
+// "call --session --dest ... --method org.guake3.RemoteControl.select_tab 1".
+func (e *Env) GdbusTabs(titles ...string) StubOption {
+	var b strings.Builder
+	b.WriteString(`method=; param=
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = --method ]; then method=${2##*.}; param=$3; fi
+  shift
+done
+case "$method" in
+`)
+	fmt.Fprintf(&b, "get_tab_count) echo '(%d,)';;\nget_tab_name) case \"$param\" in\n", len(titles))
+	for i, title := range titles {
+		fmt.Fprintf(&b, "%d) printf '%%s\\n' %s;;\n", i, shellQuote("('"+title+"',)"))
+	}
+	b.WriteString("esac;;\nesac\n")
+	return WithScript(b.String())
 }
