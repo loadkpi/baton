@@ -37,8 +37,14 @@ func writeProcEvent(t *testing.T, env *batontest.Env, path, rt, profile, session
 // writeProcEventPayload is writeProcEvent with the payload the Agent sent.
 func writeProcEventPayload(t *testing.T, env *batontest.Env, path, rt, profile, sessionID, ts, event, cwd string, p proc, payload map[string]any) {
 	t.Helper()
+	writeAgentProcEvent(t, env, "claude", path, rt, profile, sessionID, ts, event, cwd, p, payload)
+}
+
+// writeAgentProcEvent is writeProcEventPayload for the Agent agentName.
+func writeAgentProcEvent(t *testing.T, env *batontest.Env, agentName, path, rt, profile, sessionID, ts, event, cwd string, p proc, payload map[string]any) {
+	t.Helper()
 	doc := map[string]any{
-		"v": 1, "ts": ts, "agent": "claude", "profile": profile, "runtime": rt,
+		"v": 1, "ts": ts, "agent": agentName, "profile": profile, "runtime": rt,
 		"host": p.host, "agent_pid": p.pid, "agent_start": p.start, "session_id": sessionID,
 		"event": event, "cwd": cwd, "payload": payload,
 	}

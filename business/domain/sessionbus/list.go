@@ -30,6 +30,9 @@ type Session struct {
 	// Project. Later Events may come from other directories.
 	CWD    string
 	Status status.Status
+	// decidedBy is the name of the Event that decided Status, before the
+	// Agent's absence was taken into account.
+	decidedBy string
 	// Since is when the Event that decided the status was reported.
 	Since time.Time
 	// TurnStart is, for a Session that waits for input, when the turn that
@@ -66,7 +69,8 @@ const (
 	// AgentRunning means the Runtime found the process running.
 	AgentRunning
 	// AgentGone means the Runtime found the process gone; the Session is
-	// `lost`.
+	// `lost`, or `ended` for a Codex that was waiting for input (see
+	// goneStatus).
 	AgentGone
 )
 
@@ -135,7 +139,7 @@ func (b *Bus) List(ctx context.Context) (sessions []Session, warnings []string, 
 				if !known {
 					return true
 				}
-				s.Status, s.Since, decided = st, e.TS, true
+				s.Status, s.Since, s.decidedBy, decided = st, e.TS, e.Name, true
 				// Only a wait that follows a turn has a turn to look for.
 				return st == status.WaitingInput && e.Name != status.SessionStart
 			}
@@ -194,7 +198,19 @@ func toBusProcess(e Event) *runtimebus.Process {
 	return &runtimebus.Process{Host: e.Host, PID: e.AgentPID, Start: e.AgentStart, Container: e.Container, Seen: e.TS}
 }
 
-// markLost sets the status of the Sessions whose Agent is gone to lost. Each
+// goneStatus is the status of a Session whose Agent is found gone without a
+// SessionEnd: lost, except for a Codex whose newest Event is a Stop or an
+// Interrupt. Codex sends no SessionEnd on /exit, so an Agent that is gone while
+// the Session waited for input left normally (DESIGN.md, Lost detection).
+func goneStatus(s Session) status.Status {
+	if s.Agent == agent.Codex && s.Status == status.WaitingInput && (s.decidedBy == "Stop" || s.decidedBy == "Interrupt") {
+		return status.Ended
+	}
+	return status.Lost
+}
+
+// markLost sets the status of the Sessions whose Agent is gone to lost (or to
+// ended, see goneStatus). Each
 // Runtime is asked once, about all its Sessions that have not ended. The
 // warnings say what a Runtime could not find out.
 func (b *Bus) markLost(ctx context.Context, sessions []Session, procs []*runtimebus.Process) (warnings []string) {
@@ -231,7 +247,7 @@ func (b *Bus) markLost(ctx context.Context, sessions []Session, procs []*runtime
 			}
 			switch verdicts[j] {
 			case runtimebus.ProcessGone:
-				sessions[i].Status = status.Lost
+				sessions[i].Status = goneStatus(sessions[i])
 				sessions[i].Liveness = AgentGone
 			case runtimebus.ProcessAlive:
 				sessions[i].Liveness = AgentRunning
