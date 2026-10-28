@@ -72,11 +72,13 @@ func toAppSyncLines(res syncbus.Result) []string {
 		}
 		lines = append(lines, fmt.Sprintf("%s: %d files written, %d removed, %d unchanged", p.Name, p.Written, p.Removed, p.Unchanged))
 		if p.HooksFirst {
-			line := fmt.Sprintf("%s: status hooks installed; Sessions of this Profile that are already running keep their old hooks and must be restarted to report Events", p.Name)
+			// Claude Code re-reads its settings in a running Session; Codex
+			// is not known to.
+			note := "Claude Sessions of this Profile that are already running pick them up without a restart"
 			if p.Agent == agent.Codex {
-				line += "; Codex runs hooks only after you review and trust them with /hooks"
+				note = "Sessions of this Profile that are already running keep their old hooks and must be restarted to report Events; Codex runs hooks only after you review and trust them with /hooks"
 			}
-			lines = append(lines, line)
+			lines = append(lines, fmt.Sprintf("%s: status hooks installed; %s", p.Name, note))
 		}
 	}
 	return lines

@@ -206,7 +206,8 @@ type ProfileResult struct {
 	Unchanged int
 	Backups   []Backup
 	// HooksFirst is set when this run gave the Profile Baton's status hooks
-	// for the first time. Sessions already running keep their old hooks.
+	// for the first time. Running Claude Sessions pick them up; running Codex
+	// Sessions are not known to, so the note tells the user to restart them.
 	HooksFirst bool
 }
 

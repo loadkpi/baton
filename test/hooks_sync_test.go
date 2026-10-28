@@ -506,9 +506,13 @@ func TestHooksSync_WarnsOnEverySyncWhileTheBinaryIsMissing(t *testing.T) {
 	}
 }
 
-const restartNote = "already running keep their old hooks and must be restarted"
+const (
+	restartNote      = "keep their old hooks and must be restarted"
+	claudeLiveNote   = "status hooks installed; Claude Sessions of this Profile that are already running pick them up without a restart"
+	codexRestartNote = "status hooks installed; Sessions of this Profile that are already running keep their old hooks and must be restarted to report Events; Codex runs hooks only after you review and trust them with /hooks"
+)
 
-func TestHooksSync_SaysOnceThatRunningSessionsMustBeRestartedWhenHooksAreFirstAdded(t *testing.T) {
+func TestHooksSync_SaysOnceThatRunningClaudeSessionsPickUpHooksWhenTheyAreFirstAdded(t *testing.T) {
 	env := newEnv(t)
 	env.MakeProfileDir(".claude-personal")
 	env.MakeProfileDir(".claude-work")
@@ -524,8 +528,11 @@ func TestHooksSync_SaysOnceThatRunningSessionsMustBeRestartedWhenHooksAreFirstAd
 			t.Errorf("stdout lacks the note for %s:\n%s", profile, first.Stdout)
 		}
 	}
-	if got := strings.Count(first.Stdout, restartNote); got != 2 {
-		t.Errorf("the restart note appears %d times, want once per Profile:\n%s", got, first.Stdout)
+	if got := strings.Count(first.Stdout, claudeLiveNote); got != 2 {
+		t.Errorf("the note appears %d times, want once per Profile:\n%s", got, first.Stdout)
+	}
+	if strings.Contains(first.Stdout, restartNote) {
+		t.Errorf("a Claude Profile is told to restart:\n%s", first.Stdout)
 	}
 
 	second := env.Run("sync")
@@ -535,7 +542,7 @@ func TestHooksSync_SaysOnceThatRunningSessionsMustBeRestartedWhenHooksAreFirstAd
 	}
 }
 
-func TestHooksSync_TheRestartNoteComesAgainOnlyForAProfileThatGetsHooksForTheFirstTime(t *testing.T) {
+func TestHooksSync_TheHooksNoteComesAgainOnlyForAProfileThatGetsHooksForTheFirstTime(t *testing.T) {
 	env := newEnv(t)
 	env.MakeProfileDir(".claude-personal")
 	env.WriteConfig(standardConfig(env))
@@ -552,7 +559,7 @@ func TestHooksSync_TheRestartNoteComesAgainOnlyForAProfileThatGetsHooksForTheFir
 	}
 }
 
-func TestHooksSync_TheRestartNoteIsGivenForProfilesInSandboxAndComposeToo(t *testing.T) {
+func TestHooksSync_TheHooksNoteIsGivenForProfilesInSandboxAndComposeToo(t *testing.T) {
 	env := newEnv(t)
 	env.MakeProfileDir(".claude-personal")
 	env.WriteConfig(composeConfig(env, ""))
@@ -565,11 +572,13 @@ func TestHooksSync_TheRestartNoteIsGivenForProfilesInSandboxAndComposeToo(t *tes
 	if first.ExitCode != 0 {
 		t.Fatalf("exit code = %d, stderr=%q", first.ExitCode, first.Stderr)
 	}
-	for _, profile := range []string{"claude-personal", "box.claude", "box.codex", "app.claude"} {
-		want := profile + ": status hooks installed; Sessions of this Profile that are already running keep their old hooks and must be restarted to report Events"
-		if !strings.Contains(first.Stdout, want) {
+	for _, profile := range []string{"claude-personal", "box.claude", "app.claude"} {
+		if want := profile + ": " + claudeLiveNote; !strings.Contains(first.Stdout, want) {
 			t.Errorf("stdout lacks %q:\n%s", want, first.Stdout)
 		}
+	}
+	if want := "box.codex: " + codexRestartNote; !strings.Contains(first.Stdout, want) {
+		t.Errorf("stdout lacks %q:\n%s", want, first.Stdout)
 	}
 
 	second := env.Run("sync")
