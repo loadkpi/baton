@@ -55,9 +55,12 @@ func (r *Runtime) Start(ctx context.Context, req runtimebus.StartRequest) (runti
 	}
 
 	command := agentCommand(req.Agent)
-	printed, err := r.printArgs(ctx, project, command)
+	printed, err := r.printArgs(ctx, project, r.cfg.SandboxModeOf(project.Name), command)
 	if err != nil {
 		return runtimebus.Tab{}, err
+	}
+	if req.Agent == agent.Codex {
+		r.warnIfCodexCannotRun(project)
 	}
 	if err := r.ensureImage(ctx, project, printed.image); err != nil {
 		return runtimebus.Tab{}, err
@@ -125,10 +128,15 @@ type printed struct {
 // printArgs runs the Project's own run.sh in print-args mode, once, with the
 // Agent's command, and takes the printed command apart: `docker`, the options,
 // the image and then the command, one word per line (DESIGN.md, D3; the output
-// format is a contract with ai-sandbox, ADR 0001).
-func (r *Runtime) printArgs(ctx context.Context, p projectbus.Project, command []string) (printed, error) {
+// format is a contract with ai-sandbox, ADR 0001). A non-empty mode is passed
+// as --mode; which modes exist is run.sh's business.
+func (r *Runtime) printArgs(ctx context.Context, p projectbus.Project, mode string, command []string) (printed, error) {
 	script := filepath.Join(p.Path, ".ai-sandbox", "run.sh")
-	cmd := exec.CommandContext(ctx, "bash", append([]string{script, "--"}, command...)...)
+	args := []string{script}
+	if mode != "" {
+		args = append(args, "--mode", mode)
+	}
+	cmd := exec.CommandContext(ctx, "bash", append(append(args, "--"), command...)...)
 	cmd.Dir = p.Path
 	cmd.Env = append(os.Environ(), "AI_SANDBOX_PRINT_ARGS=1")
 	var stdout bytes.Buffer
@@ -164,4 +172,22 @@ func (r *Runtime) ensureImage(ctx context.Context, p projectbus.Project, image s
 		return fmt.Errorf("build image %s: %w", image, err)
 	}
 	return nil
+}
+
+// warnIfCodexCannotRun says so when the Codex config run.sh just rendered has
+// Codex use its own sandbox (bubblewrap), which cannot start inside the
+// container: every shell command of that Codex would fail. The launch goes on.
+func (r *Runtime) warnIfCodexCannotRun(p projectbus.Project) {
+	text, err := os.ReadFile(filepath.Join(homeOf(p), ".codex", "config.toml"))
+	if err != nil {
+		return
+	}
+	for _, line := range strings.Split(string(text), "\n") {
+		if strings.TrimSpace(line) == `sandbox_mode = "workspace-write"` {
+			_, _ = fmt.Fprintf(r.log, "baton: warning: project %[1]s: .ai-sandbox/run.sh rendered sandbox_mode = \"workspace-write\" for Codex, "+
+				"Codex's own sandbox cannot start inside the container, so its shell commands will fail; "+
+				"set sandbox_mode = \"dev\" (or another mode whose run.sh gives danger-full-access) under [projects.%[1]s], or update .ai-sandbox/run.sh\n", p.Name)
+			return
+		}
+	}
 }

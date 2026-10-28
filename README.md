@@ -65,7 +65,10 @@ The Profiles inside a Project's sandbox are not listed: they come from the regis
 ```toml
 [projects.my-app]                        # the Project's name, as `baton ls` shows it
 tags = ["work"]                          # tags accepted by both Agents in this Project's sandbox
+sandbox_mode = "dev"                     # optional: passed to run.sh as --mode (a Project with a sandbox only)
 ```
+
+Codex needs `sandbox_mode` when `run.sh` renders `workspace-write` in its default mode: Codex's own sandbox cannot start inside the container, so every shell command would fail. Pick a mode whose `run.sh` gives `danger-full-access` (`dev` in current ai-sandbox); `baton new` and `baton handoff` warn when the rendered config still has `workspace-write`.
 
 A Project's Docker Compose dev container is configured per Project, with its Claude and Codex Profiles; `dir` is a path inside the container, `~` is the container user's HOME. Such a Project's default Runtime is `compose`. `baton new` needs the two Baton mounts in the service (`~/.baton/bin` at `/baton/bin` read-only, `~/.baton/projects/<project>` at `/baton/project` read-write); if they are missing it prints the snippet to put in your own untracked override file, which must be listed in `files` after the Project's files. Adding them needs one recreate of the container, which ends the Sessions running in it. When there are several Profiles of an Agent, `--profile my-app.<key>` chooses:
 

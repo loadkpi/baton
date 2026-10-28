@@ -41,6 +41,7 @@ type Runtime struct {
 	projects Projects
 	batonDir string
 	log      io.Writer
+	cfg      configbus.Config
 	docker   runtimebus.Containers
 }
 
@@ -55,6 +56,13 @@ func New(projects Projects, batonDir string) *Runtime {
 // notes of run.sh) to w, which is discarded by default.
 func (r *Runtime) WithLog(w io.Writer) *Runtime {
 	r.log = w
+	return r
+}
+
+// WithConfig tells the Runtime the per-Project settings it starts sandboxes
+// with (the mode of run.sh).
+func (r *Runtime) WithConfig(cfg configbus.Config) *Runtime {
+	r.cfg = cfg
 	return r
 }
 

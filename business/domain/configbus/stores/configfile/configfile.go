@@ -10,6 +10,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -74,8 +75,9 @@ type fileTelegram struct {
 }
 
 type fileProject struct {
-	Tags    []string     `toml:"tags"`
-	Compose *fileCompose `toml:"compose"`
+	Tags        []string     `toml:"tags"`
+	SandboxMode *string      `toml:"sandbox_mode"`
+	Compose     *fileCompose `toml:"compose"`
 }
 
 // fileCompose is [projects.<name>.compose]: the service and its Profiles.
@@ -344,6 +346,10 @@ func isLoopback(host string) bool {
 	return ip != nil && ip.IsLoopback()
 }
 
+// sandboxModePattern is what run.sh --mode takes; which modes exist is
+// ai-sandbox's business.
+var sandboxModePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*$`)
+
 func toBusProjectSettings(name string, fp fileProject, hosted []configbus.Profile) (configbus.ProjectSettings, error) {
 	pn, err := projectname.Parse(name)
 	if err != nil {
@@ -354,6 +360,15 @@ func toBusProjectSettings(name string, fp fileProject, hosted []configbus.Profil
 		return configbus.ProjectSettings{}, fmt.Errorf("projects.%s: tags: %w", name, err)
 	}
 	ps := configbus.ProjectSettings{Name: pn, Tags: tags}
+	if fp.SandboxMode != nil {
+		if fp.Compose != nil {
+			return configbus.ProjectSettings{}, fmt.Errorf("projects.%s: sandbox_mode applies to a Project with a sandbox, not to one with a Compose service", name)
+		}
+		if !sandboxModePattern.MatchString(*fp.SandboxMode) {
+			return configbus.ProjectSettings{}, fmt.Errorf("projects.%s: sandbox_mode: %q must be a non-empty word of a-z, 0-9 and -, not starting with -", name, *fp.SandboxMode)
+		}
+		ps.SandboxMode = *fp.SandboxMode
+	}
 	if fp.Compose == nil {
 		return ps, nil
 	}

@@ -93,7 +93,7 @@ func startable(home string, cfg configbus.Config, log io.Writer) map[runtime.Run
 	projects := projectbus.New(projectfile.New(batonDir))
 	return map[runtime.Runtime]runtimebus.Runtime{
 		runtime.Host:    runtimehost.New(),
-		runtime.Sandbox: runtimesandbox.New(projects, batonDir).WithLog(log),
+		runtime.Sandbox: runtimesandbox.New(projects, batonDir).WithConfig(cfg).WithLog(log),
 		runtime.Compose: runtimecompose.New(projects, cfg).WithLog(log),
 	}
 }

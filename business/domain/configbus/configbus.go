@@ -76,6 +76,9 @@ type ProjectSettings struct {
 	// Tags are the tags the Profiles inside the Project's sandbox accept. None
 	// means they receive only untagged items.
 	Tags []tag.Tag
+	// SandboxMode is the ai-sandbox mode the Project's sandbox starts in (the
+	// value of run.sh --mode). Empty means run.sh's own default.
+	SandboxMode string
 	// Compose is the Project's Docker Compose service that runs Agents; nil
 	// when the Project has none.
 	Compose *ComposeSettings
@@ -126,6 +129,16 @@ func (c Config) SandboxTags(project projectname.Name) []tag.Tag {
 		}
 	}
 	return nil
+}
+
+// SandboxModeOf returns the mode the sandbox of a Project starts in, or "".
+func (c Config) SandboxModeOf(project projectname.Name) string {
+	for _, p := range c.Projects {
+		if p.Name == project {
+			return p.SandboxMode
+		}
+	}
+	return ""
 }
 
 // Profile is a host Profile: an Agent's config directory.
