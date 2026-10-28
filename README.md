@@ -31,6 +31,8 @@ Work in progress: v1 is built ticket by ticket ([.scratch/baton-v1/issues](.scra
 
 `baton watch` and `baton handoff` with a Compose container are tested only against the fake `docker`. A Task cannot be handed from a sandbox or Compose Session to a host Profile, only to a Profile of the same container Runtime. Claude Code's hook fixtures are recordings of a live Session (ticket 27); Codex's still come from its documentation. Codex asks to trust each of Baton's hooks in `/hooks`: trust them all, or only some Events arrive. See DESIGN.md, "Acceptance on a real desktop", for what was and was not checked for real.
 
+`baton help` lists the commands with their usage, and `baton <command> --help` prints one command's usage; neither runs anything.
+
 ## Build and test
 
 Requires Go 1.24 and Linux.

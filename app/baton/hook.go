@@ -37,7 +37,7 @@ const containerRootVar = "BATON_CONTAINER_ROOT"
 // hook blocks the action the hook is about.
 func runHook(ctx context.Context, c console, home string, args []string) int {
 	if len(args) == 0 {
-		return c.errorf("hook: usage: baton hook <agent> --profile <name> --runtime <host|sandbox|compose>")
+		return c.errorf("hook: %s", hookUsage)
 	}
 	agentName, flagArgs := args[0], args[1:]
 
@@ -46,7 +46,7 @@ func runHook(ctx context.Context, c console, home string, args []string) int {
 	profileName := fs.String("profile", "", "name of the Profile")
 	runtimeName := fs.String("runtime", "", "where the Agent runs")
 	if err := fs.Parse(flagArgs); err != nil || fs.NArg() != 0 {
-		return c.errorf("hook: usage: baton hook <agent> --profile <name> --runtime <host|sandbox|compose>")
+		return c.errorf("hook: %s", hookUsage)
 	}
 
 	storer := sessionfile.New(filepath.Join(home, ".baton"))

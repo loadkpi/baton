@@ -51,7 +51,16 @@ func (c console) usagef(format string, a ...any) int {
 func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	c := console{stdin: stdin, stdout: stdout, stderr: stderr}
 	if len(args) == 0 {
-		return c.usagef("a command is required (available: sync, new, task, session, handoff, hook, ls, prune, scrub, watch, top, away, back)")
+		return c.usagef("a command is required (available: %s)", commandNames())
+	}
+	if args[0] == "help" {
+		return runHelp(c, args[1:])
+	}
+	if isHelpFlag(args[0]) {
+		return runHelp(c, nil)
+	}
+	if helpRequested(args) && usageOf(args) != nil {
+		return runHelp(c, args)
 	}
 
 	home, err := os.UserHomeDir()
@@ -61,7 +70,7 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 
 	switch args[0] {
 	case "sync":
-		return runSync(ctx, c, home)
+		return runSync(ctx, c, home, args[1:])
 	case "new":
 		return runNew(ctx, c, home, args[1:])
 	case "task":
@@ -87,6 +96,6 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 	case "back":
 		return runBack(ctx, c, home, args[1:])
 	default:
-		return c.usagef("unknown command %q (available: sync, new, task, session, handoff, hook, ls, prune, scrub, watch, top, away, back)", args[0])
+		return c.usagef("unknown command %q (available: %s)", args[0], commandNames())
 	}
 }

@@ -15,7 +15,7 @@ import (
 // notifications to Telegram instead of the desktop, until `baton back`.
 func runAway(ctx context.Context, c console, home string, args []string) int {
 	if len(args) != 0 {
-		return c.usagef("away: usage: baton away")
+		return c.usagef("away: %s", awayUsage)
 	}
 	// Going away without a working Telegram would silence the notifications
 	// the user is relying on, so the settings must be there first.
@@ -32,7 +32,7 @@ func runAway(ctx context.Context, c console, home string, args []string) int {
 // runBack implements `baton back`: notifications return to the desktop.
 func runBack(ctx context.Context, c console, home string, args []string) int {
 	if len(args) != 0 {
-		return c.usagef("back: usage: baton back")
+		return c.usagef("back: %s", backUsage)
 	}
 	if err := awaybus.New(awayfile.New(filepath.Join(home, ".baton"))).Back(ctx); err != nil {
 		return c.errorf("back: %v", err)

@@ -21,7 +21,7 @@ const noProject = "-"
 func runLs(ctx context.Context, c console, home string, args []string) int {
 	long := len(args) == 1 && args[0] == "--long"
 	if len(args) != 0 && !long {
-		return c.usagef("usage: baton ls [--long]")
+		return c.usagef("%s", lsUsage)
 	}
 
 	cfg := readerConfig(ctx, c, home)

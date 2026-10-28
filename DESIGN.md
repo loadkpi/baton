@@ -66,6 +66,8 @@ Existing session managers (Agent Deck, Agent of Empires, CCManager, kage, git-pa
 
 v1 has no stateful daemon. All truth lives in files under `~/.baton`; the CLI, the hooks and a stateless watcher read and write those files.
 
+Every command prints its usage on `-h`/`--help`, and `baton help` lists them all; the check comes first in `run`, before any command reads its arguments or the config. Ticket 34: `baton sync --help` once ran a real sync because `sync` ignored its arguments, so `sync` now refuses any argument and help can never reach a command that writes.
+
 ```mermaid
 flowchart LR
   subgraph host[Host]

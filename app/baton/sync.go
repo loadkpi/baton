@@ -19,7 +19,10 @@ import (
 )
 
 // runSync implements `baton sync`.
-func runSync(ctx context.Context, c console, home string) int {
+func runSync(ctx context.Context, c console, home string, args []string) int {
+	if len(args) != 0 {
+		return c.usagef("%s", syncUsage)
+	}
 	configPath := filepath.Join(home, ".config", "baton", "config.toml")
 	cfg, err := configbus.New(configfile.New(configPath, home)).Load(ctx)
 	if err != nil {
