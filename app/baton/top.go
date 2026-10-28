@@ -13,6 +13,7 @@ import (
 
 	"github.com/loadkpi/baton/business/domain/launchbus"
 	"github.com/loadkpi/baton/business/domain/launchbus/stores/launchguake"
+	"github.com/loadkpi/baton/business/domain/namebus"
 	"github.com/loadkpi/baton/foundation/rawterm"
 	"github.com/loadkpi/baton/foundation/terminal"
 )
@@ -51,7 +52,7 @@ func runTop(ctx context.Context, c console, home string, args []string) int {
 	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	t := &top{ctx: ctx, c: c, home: home, out: out, tabs: launchguake.New(), selected: -1}
+	t := &top{ctx: ctx, c: c, home: home, out: out, tabs: launchguake.New(), names: newNames(home), selected: -1}
 	keys := readKeys(in)
 	t.reload()
 	t.draw()
@@ -99,6 +100,8 @@ type top struct {
 	home string
 	out  *os.File
 	tabs launchbus.TabSwitcher
+	// names remembers the names found, for as long as the screen lives.
+	names *namebus.Bus
 
 	lines []line
 	// selected is the index of the selected row, -1 for none; selectedID is
@@ -123,7 +126,8 @@ func rowID(l line) string {
 // reload reads the Sessions again; what goes wrong is told in the footer and
 // the rows stay as they were.
 func (t *top) reload() {
-	listing, err := newWorkBus(t.home, readerConfig(t.ctx, quiet(t.c), t.home)).List(t.ctx)
+	cfg := readerConfig(t.ctx, quiet(t.c), t.home)
+	listing, err := newWorkBus(t.home, cfg).List(t.ctx)
 	if err != nil {
 		t.message = err.Error()
 		return
@@ -132,6 +136,8 @@ func (t *top) reload() {
 		t.message = "warning: " + listing.Warnings[0]
 	}
 	t.lines = toAppLines(listing)
+	configureNames(t.names, t.home, cfg)
+	addDetails(t.ctx, t.lines, t.names, time.Now())
 	t.selected = -1
 	for i, l := range t.lines {
 		if rowID(l) == t.selectedID {

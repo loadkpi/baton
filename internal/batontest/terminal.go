@@ -42,9 +42,22 @@ type Terminal struct {
 // Env's isolated environment. The test must call Wait.
 func (e *Env) StartTerminal(args ...string) *Terminal {
 	e.t.Helper()
+	return e.StartTerminalSized(0, args...)
+}
+
+// StartTerminalSized is StartTerminal on a terminal cols characters wide; 0
+// leaves the size unset, as StartTerminal does.
+func (e *Env) StartTerminalSized(cols int, args ...string) *Terminal {
+	e.t.Helper()
 	master, slave, err := openPTY()
 	if err != nil {
 		e.t.Fatalf("open pseudo-terminal: %v", err)
+	}
+	if cols > 0 {
+		ws := struct{ Row, Col, X, Y uint16 }{Row: 40, Col: uint16(cols)}
+		if err := ioctl(master, syscall.TIOCSWINSZ, unsafe.Pointer(&ws)); err != nil {
+			e.t.Fatalf("set the terminal size: %v", err)
+		}
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)

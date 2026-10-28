@@ -16,19 +16,55 @@ const (
 	reverse     = "\x1b[7m"
 	boldYellow  = "\x1b[1;33m"
 	boldRed     = "\x1b[1;31m"
+	dim         = "\x1b[2m"
 	plain       = "\x1b[0m"
 )
 
 // defaultWidth is the width of a terminal that does not say how wide it is.
-const defaultWidth = 80
+const defaultWidth = 120
 
 // maxCell is the widest a cell of the table is drawn; longer ones end in "…".
 const maxCell = 24
 
-var topHeader = []string{"PROJECT", "TASK", "AGENT", "SESSION", "PROFILE", "RUNTIME", "STATUS"}
-
-// statusColumn is the index of the STATUS cell of a row.
+// statusColumn is the index of the STATUS cell of a row of `baton ls`.
 const statusColumn = 6
+
+// wideWidth is the width from which `baton top` has the LAST column; under it
+// the last action goes on a line of its own under the selected row.
+const wideWidth = 100
+
+// maxLong is the widest NAME and LAST are drawn: they take the room that is
+// left, not a fixed share.
+const maxLong = 200
+
+// column is a column of the table: its title, the least it is narrowed to (0
+// for a column that is never narrowed) and the widest it is drawn.
+type column struct {
+	title string
+	least int
+	limit int
+}
+
+// topColumns are the columns of the screen; LAST is one only when there is room.
+func topColumns(wide bool) []column {
+	cols := []column{
+		{"PROJECT", 8, maxCell}, {"TASK", 12, maxCell}, {"AGENT", 0, maxCell}, {"SESSION", 0, maxCell},
+		{"NAME", 8, maxLong},
+	}
+	if wide {
+		cols = append(cols, column{"LAST", 8, maxLong})
+	}
+	return append(cols, column{"PROFILE", 6, maxCell}, column{"RUNTIME", 0, maxCell}, column{"STATUS", 0, maxCell})
+}
+
+// topCells are the cells of a row, for the columns of topColumns.
+func topCells(l line, wide bool) []string {
+	cells := longCells(l)
+	if wide {
+		return cells
+	}
+	return append(cells[:sessionColumn+2], cells[sessionColumn+3:]...) // without LAST
+}
 
 // topScreen is everything one frame of `baton top` shows.
 type topScreen struct {
@@ -60,18 +96,25 @@ func (s topScreen) render() string {
 	var out []string
 	out = append(out, clip(fmt.Sprintf("baton top: %d %s, %d waiting for you", len(s.lines), plural(len(s.lines), "session"), waiting(s.lines)), width), "")
 
+	wide := width >= wideWidth
+	cols := topColumns(wide)
 	cells := make([][]string, 0, len(s.lines)+1)
-	cells = append(cells, topHeader)
-	for _, l := range s.lines {
-		cells = append(cells, l.cells)
+	header := make([]string, len(cols))
+	least, flex := make([]int, len(cols)), make([]bool, len(cols))
+	for i, c := range cols {
+		header[i], least[i], flex[i] = c.title, c.least, c.limit == maxLong
 	}
-	widths := make([]int, len(topHeader))
+	cells = append(cells, header)
+	for _, l := range s.lines {
+		cells = append(cells, topCells(l, wide))
+	}
+	widths := make([]int, len(cols))
 	for _, row := range cells {
 		for i, c := range row {
-			widths[i] = min(max(widths[i], utf8.RuneCountInString(c)), maxCell)
+			widths[i] = min(max(widths[i], utf8.RuneCountInString(c)), cols[i].limit)
 		}
 	}
-	fitColumns(widths, width-prefixWidth)
+	fitColumns(widths, least, flex, width-prefixWidth)
 	for i, row := range cells {
 		text := "    " + formatRow(row, widths)
 		style := ""
@@ -93,6 +136,9 @@ func (s topScreen) render() string {
 			text = style + text + plain
 		}
 		out = append(out, text)
+		if i > 0 && i-1 == s.selected && !wide {
+			out = append(out, dim+clip(strings.Repeat(" ", prefixWidth)+s.lines[i-1].last, width)+plain)
+		}
 	}
 	if len(s.lines) == 0 {
 		out = append(out, "no sessions")
@@ -123,34 +169,35 @@ func markerOf(st string) (marker, color string) {
 // prefixWidth is the width of the cursor and the marker in front of a row.
 const prefixWidth = 4
 
-// minShrunk maps the columns that may be narrowed to fit the terminal to the
-// least they are narrowed to; the others are short or matter too much (STATUS,
-// and the generated Task id) to be cut.
-var minShrunk = map[int]int{0: 8, 1: 12, 4: 6}
-
-// fitColumns narrows the widest shrinkable column, one character at a time,
-// until the columns and the gaps between them fit in avail characters or none
-// can be narrowed more.
-func fitColumns(widths []int, avail int) {
-	for {
-		total := 2 * (len(widths) - 1)
-		for _, w := range widths {
-			total += w
-		}
-		if total <= avail {
-			return
-		}
-		widest := -1
-		for i, least := range minShrunk {
-			if widths[i] > least && (widest < 0 || widths[i] > widths[widest]) {
-				widest = i
+// fitColumns narrows the columns until they and the gaps between them fit in
+// avail characters or none can be narrowed more: first NAME and LAST, which
+// take the room that is left, then the others. Within a group the widest column
+// is narrowed, one character at a time. least says to what a column may be
+// narrowed, 0 for never; flex marks NAME and LAST.
+func fitColumns(widths, least []int, flex []bool, avail int) {
+	for _, phase := range []bool{true, false} {
+		for !fits(widths, avail) {
+			widest := -1
+			for i, w := range widths {
+				if flex[i] == phase && least[i] > 0 && w > least[i] && (widest < 0 || w > widths[widest]) {
+					widest = i
+				}
 			}
+			if widest < 0 {
+				break
+			}
+			widths[widest]--
 		}
-		if widest < 0 {
-			return
-		}
-		widths[widest]--
 	}
+}
+
+// fits reports whether the columns and the gaps between them fit in avail.
+func fits(widths []int, avail int) bool {
+	total := 2 * (len(widths) - 1)
+	for _, w := range widths {
+		total += w
+	}
+	return total <= avail
 }
 
 func formatRow(row []string, widths []int) string {

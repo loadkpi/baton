@@ -50,6 +50,11 @@ type Session struct {
 	// not or could not be. PID is that process, 0 when no process was named.
 	Liveness Liveness
 	PID      int
+	// Newest is the Session's newest Event, whoever wrote it.
+	Newest Event
+	// Transcript is the transcript_path the newest Event that names one
+	// carries (the Agent's own file of the conversation); empty if none does.
+	Transcript string
 }
 
 // Liveness is what Baton could find out about the Agent process of a Session
@@ -152,7 +157,11 @@ func (b *Bus) List(ctx context.Context) (sessions []Session, warnings []string, 
 			return !known || st == status.Running || st == status.WaitingApproval
 		}
 		err = b.storer.QueryEventsBackward(ctx, ref, func(e Event) bool {
+			if s.Transcript == "" {
+				s.Transcript = transcriptOf(e)
+			}
 			if newest {
+				s.Newest = e
 				newest = false
 				if proc = toBusProcess(e); proc != nil {
 					proc.Project = ref.Project
@@ -170,6 +179,9 @@ func (b *Bus) List(ctx context.Context) (sessions []Session, warnings []string, 
 		})
 		if err != nil {
 			return nil, nil, err
+		}
+		if s.Transcript == "" {
+			s.Transcript = transcriptOf(first)
 		}
 		sessions = append(sessions, s)
 		procs = append(procs, proc)

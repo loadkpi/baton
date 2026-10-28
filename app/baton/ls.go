@@ -19,11 +19,13 @@ const noProject = "-"
 // runLs implements `baton ls`: every Session with its Project, Task, Agent,
 // the start of its native session id, Profile, Runtime and status. Reading Sessions registers the Projects they are in.
 func runLs(ctx context.Context, c console, home string, args []string) int {
-	if len(args) != 0 {
-		return c.usagef("ls takes no arguments")
+	long := len(args) == 1 && args[0] == "--long"
+	if len(args) != 0 && !long {
+		return c.usagef("usage: baton ls [--long]")
 	}
 
-	listing, err := newWorkBus(home, readerConfig(ctx, c, home)).List(ctx)
+	cfg := readerConfig(ctx, c, home)
+	listing, err := newWorkBus(home, cfg).List(ctx)
 	if err != nil {
 		return c.errorf("%v", err)
 	}
@@ -37,9 +39,16 @@ func runLs(ctx context.Context, c console, home string, args []string) int {
 
 	lines := toAppLines(listing)
 	w := tabwriter.NewWriter(c.stdout, 0, 0, 2, ' ', 0)
-	_, _ = fmt.Fprintln(w, "PROJECT\tTASK\tAGENT\tSESSION\tPROFILE\tRUNTIME\tSTATUS")
+	header, cells := strings.Join(lsHeader, "\t"), func(l line) []string { return l.cells }
+	if long {
+		names := newNames(home)
+		configureNames(names, home, cfg)
+		addDetails(ctx, lines, names, time.Now())
+		header, cells = strings.Join(longHeader, "\t"), longCells
+	}
+	_, _ = fmt.Fprintln(w, header)
 	for _, l := range lines {
-		_, _ = fmt.Fprintln(w, joinCells(l.cells))
+		_, _ = fmt.Fprintln(w, joinCells(cells(l)))
 	}
 	_ = w.Flush()
 	for _, l := range lines {
@@ -54,6 +63,25 @@ func runLs(ctx context.Context, c console, home string, args []string) int {
 		}
 	}
 	return exitOK
+}
+
+// lsHeader is the header of `baton ls`; longHeader is that of `baton ls
+// --long` and `baton top`: NAME and LAST come after SESSION.
+var (
+	lsHeader   = []string{"PROJECT", "TASK", "AGENT", "SESSION", "PROFILE", "RUNTIME", "STATUS"}
+	longHeader = []string{"PROJECT", "TASK", "AGENT", "SESSION", "NAME", "LAST", "PROFILE", "RUNTIME", "STATUS"}
+)
+
+// sessionColumn is the index of the SESSION cell; NAME and LAST follow it in
+// the long form.
+const sessionColumn = 3
+
+// longCells are the cells of a row with its name and last action put in.
+func longCells(l line) []string {
+	out := make([]string, 0, len(l.cells)+2)
+	out = append(out, l.cells[:sessionColumn+1]...)
+	out = append(out, l.name, l.last)
+	return append(out, l.cells[sessionColumn+1:]...)
 }
 
 // noSession is shown as the session id of a launch that no Event has followed:
@@ -73,7 +101,10 @@ const noEvents = "no_events"
 type line struct {
 	at    time.Time
 	cells []string
-	hint  string
+	// name and last are the name of the Session and what it did last; they
+	// are set by addDetails, and only where they are shown.
+	name, last string
+	hint       string
 	// Exactly one of these is set: the Session the row shows, or the launch
 	// that no Event has followed.
 	placed *workbus.Placed
